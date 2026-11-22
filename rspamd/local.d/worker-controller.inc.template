@@ -1,0 +1,12 @@
+# Rendered by deploy/init-host.sh (sed substitution) into
+# worker-controller.inc before the rspamd container starts. Source of
+# truth for the password is the generated state/controller.password.
+bind_socket = "*:11334";
+password = "${RSPAMD_PASSWORD}";
+enable_password = "${RSPAMD_PASSWORD}";
+# Only the controller's own loopback is password-exempt. Every other
+# client (the filter container, the dashboard) authenticates with the
+# Password header. Do NOT add the docker bridge range (172.16.0.0/12)
+# here: that would grant password-free privileged controller access to
+# any container on the network.
+secure_ip = "127.0.0.1";

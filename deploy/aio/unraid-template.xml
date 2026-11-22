@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>spamfilter</Name>
+  <Repository>imap-spamfilter-unraid:2.14.1</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project/>
+  <Overview>Spamfilter til familiens og firmaets IMAP-postkasser. Alt kører i denne ene container: filteret og WebUI'en, rspamd (spam-motor), Redis (Bayes-hukommelse), Unbound (DNS til sortlister) og ClamAV (virusscanning). Intet bliver slettet: spam flyttes til mappen Spamfilter i samme postkasse. Kun WebUI'en (port 8080) er åben; rspamd, Redis, Unbound og ClamAV lytter kun inde i containeren. Alle data ligger i app-mappen. Nødadgang: docker exec -it spamfilter sfctl. Opdatering: deploy/aio/update.sh (backup, kontrol og automatisk tilbagerulning). Start aldrig de gamle stoppede containere spamfilter-redis, -rspamd, -unbound eller spamfilter-legacy i hånden, mens denne kører: de bruger de samme Redis-data. Tilbage til fire containere: deploy/aio/rollback.sh.</Overview>
+  <Category>Security: Network:Other</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <TemplateURL/>
+  <Icon>http://192.168.1.10:18080/static/icon-192.png</Icon>
+  <ExtraParams>--restart unless-stopped --stop-timeout 90 --log-opt max-size=10m --log-opt max-file=3 --memory 4g --cpus 4 --pids-limit 512 --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add KILL --security-opt no-new-privileges --tmpfs /run/spamfilter:rw,nosuid,nodev,noexec,size=16m,mode=0755 -p 192.168.1.10:18080:8080/tcp</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>Lav ikke om på de avancerede felter: porten er bundet til 192.168.1.10 under Extra Parameters, og stien rspamd-data skal pege på rspamd/data i app-mappen.</Requires>
+  <Config Name="App-mappe" Target="/appdata" Default="/mnt/user/appdata/spamfilter" Mode="rw" Description="Spamfilterets mappe med alt: konfiguration, database, Redis, rspamd og backups. Ejere og rettigheder bevares som de er." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/spamfilter</Config>
+  <Config Name="rspamd-data" Target="/var/lib/rspamd" Default="/mnt/user/appdata/spamfilter/rspamd/data" Mode="rw" Description="rspamd/data i app-mappen (rspamd-billedet har et VOLUME her; uden stien gemmes rspamds data i et anonymt volume)." Type="Path" Display="advanced" Required="true" Mask="false">/mnt/user/appdata/spamfilter/rspamd/data</Config>
+  <Config Name="Backup-placering" Target="/backup" Default="/mnt/user/backup/spamfilter" Mode="rw" Description="Krypterede natlige backups (kl. 02:30). Skal ligge på en anden disk end app-mappen (fx sharen backup) og ejes af uid 10099. Uden stien laves der ingen backup ud af app-mappen." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/backup/spamfilter</Config>
+  <Config Name="Tidszone" Target="TZ" Default="Europe/Copenhagen" Mode="" Description="Tidszone for logs, dagsoversigt og ugerapport." Type="Variable" Display="advanced" Required="true" Mask="false">Europe/Copenhagen</Config>
+  <Config Name="Betroede proxyer" Target="TRUSTED_PROXIES" Default="" Mode="" Description="IP-adresser på proxyen foran WebUI'en (fx Cloudflare Tunnel på værtsnetværket: 192.168.1.10). Tom = kun hjemmenetværket." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Hjemmenetværk" Target="LOCAL_NETWORKS" Default="" Mode="" Description="Netværk, der tæller som hjemme (kommasepareret). Tom = standard (private adresser)." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Antivirus (ClamAV)" Target="SF_CLAMAV" Default="1" Mode="" Description="1 = mails virusscannes med ClamAV (bruger ca. 1-1,5 GB RAM; containeren har 4 GB). 0 = slået fra, fx på en server med lidt RAM. Virussignaturerne gemmes i app-mappen under clamav." Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+  <Config Name="LAN-adresse" Target="SPAMFILTER_LAN_URL" Default="" Mode="" Description="Filterets LAN-adresse til Home Assistant-pakken. Tom = http://192.168.1.10:18080." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Opdateringskilde" Target="SF_UPDATE_REPO" Default="" Mode="" Description="GitHub-repo (ejer/navn), som siden Opdateringer i WebUI'en tjekker for nye versioner. Sættes i operations/site.env på værten; tom = siden viser, hvordan det sættes op." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+</Container>

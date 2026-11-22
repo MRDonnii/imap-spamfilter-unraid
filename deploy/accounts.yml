@@ -1,0 +1,44 @@
+defaults:
+  mode: shadow
+  threshold: 8.0
+  min_threshold_allowed: 5.0
+  junk_retention_days: 0
+  trained_retention_days: 0
+  poll_interval: 600
+  auto_special_folders: true
+  # 2.0 owner decisions: one shared Bayes pool; spam goes to a dedicated
+  # "Spamfilter" folder (set per account so SPECIAL-USE \Junk never wins).
+  bayes_user: spamfilter
+  # 2.3 keys (all optional; the built-in defaults are shown, leave them out):
+  # known_contacts: true          # trust people you wrote to (TH_KNOWN_CONTACT, TH_REPLY ...)
+  # known_contact_score: -4.0     # -6 .. -1
+  # sent_folders: []              # per account: override Sent detection, max 10 names
+  # contact_group: null           # per account: null = the mailbox domain (molt-* share molt.example)
+  # zap: true                     # rescan unsure mail after 45 min / 4 h / 24 h
+  # attachment_block: [...]       # absent = built-in list (exe scr ... reg); [] = block nothing
+  # threat_notice: true           # Straks-advarsel: a short notice in the mailbox's own INBOX when a
+  #                               # virus/phishing/malware link/dangerous attachment is stopped (move
+  #                               # mode only, max 1 per 30 min, no links/attachments from the mail)
+  # protected_domains: [pinsikbing.example, gravisk.example, vexar.example]
+  #                               # B22: lookalikes (pinslkbing.example) are stopped and watched weekly
+  #                               # for new registrations; every mailbox domain is protected too.
+  #                               # Edit under Indstillinger -> Beskyttede domæner.
+  # bayes_user is rewritten by "Byg Bayes op på ny" (spamfilter-r2, -r3 ...) and put back by
+  # "Gendan tidligere Bayes"; do not edit it by hand while a rebuild runs.
+accounts:
+  - name: bynet
+    enabled: true
+    user: ole@bynet.example
+    imap_host: imap.gigahost.dk
+    imap_port: 993
+    ssl: true
+    junk: Spamfilter
+    password_file: /state/imap-secrets/bynet
+  - name: molt
+    enabled: false
+    user: ole@molt.example
+    imap_host: mail.scannet.dk
+    imap_port: 993
+    ssl: true
+    junk: Spamfilter
+    password_file: /state/imap-secrets/molt

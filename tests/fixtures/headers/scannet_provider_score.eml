@@ -1,0 +1,37 @@
+Return-Path: <user@lastchance.guru>
+Received: from scan2.mf.scannet.dk ([10.2.85.12])
+	by box11.mf.scannet.dk with LMTP
+	id qC/6Mrlg12qddRoAwj4nug
+	(envelope-from <user@lastchance.guru>); Tue, 20 Oct 2026 14:38:17 +0200
+Received: from localhost (localhost [127.0.0.1])
+	by scan2.mf.scannet.dk (Postfix) with ESMTP id C4C8D1800143
+	for <user@example-b.dk>; Tue, 20 Oct 2026 14:38:17 +0200 (CEST)
+X-Virus-Scanned: amavis at scan2.mf.scannet.dk
+X-Spam-Flag: NO
+X-Spam-Score: 6.338
+X-Spam-Level: ******
+X-Spam-Status: No, score=6.338 tagged_above=-999 required=8
+ tests=[HTML_FONT_SIZE_LARGE=0.001, HTML_IMAGE_ONLY_12=1.629,
+ HTML_IMAGE_RATIO_02=1.2, HTML_MESSAGE=0.001, MIXED_HREF_CASE=1.999,
+ SPF_HELO_PASS=-0.001, SPF_PASS=-0.001, SSO_BAD_TLD_LINK2=1.5,
+ T_TVD_MIME_EPI=0.01] autolearn=disabled
+Received: from scan2.mf.scannet.dk ([127.0.0.1])
+ by localhost (scan2.mf.scannet.dk [127.0.0.1]) (amavis, port 10024)
+ with ESMTP id sT5KXi3M6_wd for <user@example-b.dk>;
+ Tue, 20 Oct 2026 14:38:16 +0200 (CEST)
+Received: from mail.gadgetoutlet.shop (mail.gadgetoutlet.shop [62.173.146.164])
+	(using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits)
+	 key-exchange X25519 server-signature RSA-PSS (2048 bits) server-digest SHA256)
+	(No client certificate requested)
+	by scan2.mf.scannet.dk (Postfix) with ESMTPS id 50EEE1800147
+	for <user@example-b.dk>; Tue, 20 Oct 2026 14:38:16 +0200 (CEST)
+Received: from mail.gadgetoutlet.shop (labe.tilabe.autos [185.225.69.39])
+	by mail.gadgetoutlet.shop (Postfix) with ESMTPA id 4357F823DC;
+	Tue, 20 Oct 2026 15:31:57 +0300 (EEST)
+From: "MelaraMax" <user@lastchance.guru>
+To: user@example-b.dk
+Subject: Fixture: Scannet score above 5 but not flagged
+Date: Tue, 20 Oct 2026 15:31:56 +0300
+Message-ID: <fixture-scannet-score@example.invalid>
+
+Spam body.

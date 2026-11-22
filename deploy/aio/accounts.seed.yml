@@ -1,0 +1,13 @@
+# Seed config of a FRESH all-in-one install (written once by the first
+# start when the app dir is empty; never touches an existing accounts.yml).
+# Add mailboxes in the WebUI under Konti, or here (see CONFIGURATION.md).
+defaults:
+  mode: shadow
+  threshold: 8.0
+  min_threshold_allowed: 5.0
+  junk_retention_days: 0
+  trained_retention_days: 0
+  poll_interval: 600
+  auto_special_folders: true
+  bayes_user: spamfilter
+accounts: []

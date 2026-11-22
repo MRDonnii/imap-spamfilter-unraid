@@ -1,0 +1,63 @@
+#!/bin/bash
+# sf-run NAME [--wait PART]... -- COMMAND [ARGS...]
+#
+# Wrapper for every program supervisord starts in the all-in-one container
+# (deploy/aio/supervisord.conf). Runs as the program's own uid:
+#   - prefixes every output line with [NAME] (one container log, four parts)
+#   - back-off: a program that died less than a minute after its previous
+#     start waits 2, 4, 8 ... 60 s before it starts again
+#   - --wait PART: waits (sf-health wait, at most SF_WAIT_TIMEOUT s, default
+#     120) until redis / unbound / rspamd answer, then starts anyway
+#   - finally execs COMMAND, so supervisord signals the program itself
+# Env: SF_RUN_STATE_DIR (/run/spamfilter/run), SF_HEALTH (/usr/local/bin/sf-health),
+#      SF_RUN_NO_PREFIX=1 (tests), SF_WAIT_TIMEOUT (120), SF_BACKOFF_MAX (60).
+set -euo pipefail
+
+name=${1:?usage: sf-run NAME [--wait PART]... -- COMMAND [ARGS...]}
+shift
+waits=()
+while (( $# )) && [[ "$1" != -- ]]; do
+  case "$1" in
+    --wait) waits+=("${2:?--wait needs a part}"); shift 2 ;;
+    *) echo "sf-run: unknown option $1" >&2; exit 2 ;;
+  esac
+done
+[[ "${1:-}" == -- ]] && shift
+(( $# )) || { echo "sf-run: no command for $name" >&2; exit 2; }
+[[ "$name" =~ ^[a-z0-9-]+$ ]] || { echo "sf-run: bad name $name" >&2; exit 2; }
+
+if [[ "${SF_RUN_NO_PREFIX:-0}" != 1 ]]; then
+  # sed is the reader of the pipe; after the exec below it outlives nothing:
+  # when the program exits the pipe closes and sed flushes and ends.
+  exec > >(exec sed -u "s/^/[$name] /") 2>&1
+fi
+
+state_dir=${SF_RUN_STATE_DIR:-/run/spamfilter/run}
+max=${SF_BACKOFF_MAX:-60}
+now=$(date +%s)
+last=0 count=0
+if [[ -r "$state_dir/$name" ]]; then
+  read -r last count <"$state_dir/$name" || true
+  [[ "$last" =~ ^[0-9]+$ ]] || last=0
+  [[ "$count" =~ ^[0-9]+$ ]] || count=0
+fi
+if (( now - last < 60 )); then
+  count=$(( count + 1 ))
+else
+  count=0
+fi
+printf '%s %s\n' "$now" "$count" >"$state_dir/$name" 2>/dev/null || true
+if (( count > 0 )); then
+  delay=$(( 1 << (count < 7 ? count : 7) ))
+  (( delay > max )) && delay=$max
+  echo "restarted ${count}x within a minute - waiting ${delay} s before the next start"
+  sleep "$delay"
+fi
+
+if (( ${#waits[@]} )); then
+  timeout=${SF_WAIT_TIMEOUT:-120}
+  if ! "${SF_HEALTH:-/usr/local/bin/sf-health}" wait --timeout "$timeout" "${waits[@]}"; then
+    echo "${waits[*]} not ready after ${timeout} s - starting anyway"
+  fi
+fi
+exec "$@"

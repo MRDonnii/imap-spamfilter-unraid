@@ -1,0 +1,204 @@
+# spamfilter 2.2 (B3): registrable domains (eSLD, rspamd filter
+# email:domain:tld) that may legitimately use a brand name from
+# th_brand_names.re in the From display name. Mail from these never gets
+# TH_BRAND_SPOOF. One domain per line.
+#
+# OWNER DATA: when a genuine reseller, relay or review platform is hit,
+# add its registrable domain here (e.g. a Telenor reseller) and redeploy.
+# Own domains: from the local site config (config/site.yml: mail_domains),
+# added to the rendered copy at container start (deploy/aio/aio_render.py).
+# Known legitimate relays that put a brand in the display name
+appleid.com
+trustpilotmail.com
+metamail.com
+teams-events.com
+bilkatogo.dk
+# PostNord
+postnord.com
+postnord.dk
+postnord.se
+# GLS
+gls-denmark.com
+gls-group.eu
+gls-group.com
+gls-pakkeshop.dk
+gls.dk
+glsdanmark.dk
+pakkeshop.dk
+# DAO
+dao.as
+dao.dk
+dao365.dk
+# Bring
+bring.dk
+bring.com
+bring.se
+posten.no
+# DHL, UPS, FedEx
+dhl.com
+dhl.dk
+dhl.de
+ups.com
+fedex.com
+# EasyPark, Brobizz, Saphe
+easypark.net
+easypark.com
+easypark.dk
+brobizz.com
+brobizz.dk
+saphe.com
+saphe.dk
+reepay.com
+frisbii.com
+# MobilePay / Vipps
+mobilepay.dk
+vippsmobilepay.com
+vipps.no
+mobilepay.fi
+danskebank.dk
+# Nets / Dankort / Nexi
+nets.eu
+nexigroup.com
+dankort.dk
+betalingsservice.dk
+# e-Boks, MitID/NemID, Skat, Digital Post
+e-boks.dk
+e-boks.com
+mitid.dk
+nemid.nu
+digst.dk
+skat.dk
+sktst.dk
+skattestyrelsen.dk
+borger.dk
+mit.dk
+digitalpost.dk
+# Streaming
+netflix.com
+spotify.com
+# Apple
+apple.com
+icloud.com
+# Microsoft
+microsoft.com
+outlook.com
+office.com
+office365.com
+live.com
+hotmail.com
+outlook.dk
+live.dk
+hotmail.dk
+# Meta
+instagram.com
+facebook.com
+facebookmail.com
+meta.com
+# Domains and hosting
+godaddy.com
+punktum.dk
+punktum.com
+dk-hostmaster.dk
+# Retail
+zalando.dk
+zalando.com
+zalando.de
+silvan.dk
+harald-nyborg.dk
+jemogfix.dk
+jemfix.com
+bauhaus.dk
+elgiganten.dk
+coop.dk
+coop365.dk
+coopbank.dk
+# Coop's chains (their member mails name Coop in the subject)
+superbrugsen.dk
+dagligbrugsen.dk
+brugsen.dk
+lokalbrugsen.dk
+kvickly.dk
+sallinggroup.com
+salling.dk
+bilka.dk
+netto.dk
+foetex.dk
+amazon.com
+amazon.de
+amazon.co.uk
+amazon.se
+amazonses.com
+aws.com
+amazonaws.com
+temu.com
+temuemail.com
+ikea.com
+ikea.dk
+makita.dk
+makita.com
+cnn.com
+trustpilot.com
+# Banks and payment
+nordea.dk
+nordea.com
+nordeapension.dk
+danskebank.com
+jyskebank.dk
+sydbank.dk
+sparnord.dk
+djurslandsbank.dk
+lunar.app
+paypal.com
+paypal.dk
+klarna.com
+klarna.dk
+# Telecom and energy
+telenor.dk
+telia.dk
+yousee.dk
+norlys.dk
+tdc.dk
+crm-ts.com
+f-secure.com
+# 2.6 (A1): brands added for the subject rule (th_subject_brands.re) and
+# the display-name rule. Only domains the brand really owns: a listed
+# domain exempts EVERY brand, so a domain a phisher could register must
+# never be here. "uncertain" = believed to be the brand's own, not yet
+# confirmed from a real mail.
+# Banks
+al-bank.dk
+nykredit.dk
+nykredit.com
+rd.dk
+# uncertain: Lunar's former name (Lunar Way)
+lunarway.com
+# Insurance
+tryg.dk
+tryg.com
+tryghedsgruppen.dk
+alka.dk
+topdanmark.dk
+codan.dk
+gjensidige.dk
+gjensidige.no
+gjensidige.com
+if.dk
+# uncertain: If's group domain
+if-insurance.com
+# Telecom and energy
+telenor.com
+telia.com
+teliacompany.com
+# uncertain: Nuuday (YouSee's parent) and TDC NET
+nuuday.dk
+tdcnet.dk
+3.dk
+andelenergi.dk
+andel.dk
+orsted.dk
+orsted.com
+ewii.dk
+# Transport
+dsb.dk
+rejsekort.dk
+rejseplanen.dk

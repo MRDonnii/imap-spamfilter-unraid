@@ -1,0 +1,32 @@
+Return-Path: <SRS0=/DIM=GF=hotmail.com=user+SRS=g1gbi=GF=shop.example=order@gigahost.dk>
+X-Original-To: user@example-a.dk
+Delivered-To: user@example-a.dk
+Received: from mx1.gigahost.dk (mx1.gigahost.dk [46.183.139.11])
+	by mailstore4.gigahost.dk (Postfix) with ESMTPS id 63D599410CA9
+	for <user@example-a.dk>; Wed,  7 Oct 2026 19:17:32 +0000 (UTC)
+Received: from AM0PR83CU005.outbound.protection.outlook.com (mail-westeuropeazlp17010012.outbound.protection.outlook.com [40.93.65.12])
+	by mx1.gigahost.dk (Postfix) with ESMTPS id 2E6031F723
+	for <user@example-a.dk>; Wed,  7 Oct 2026 19:17:28 +0000 (UTC)
+Received: from AM6P250MB1342.EURP250.PROD.OUTLOOK.COM (2603:10a6:20b:6be::8)
+ by GV2P250MB0755.EURP250.PROD.OUTLOOK.COM (2603:10a6:150:7f::19) with
+ Microsoft SMTP Server (version=TLS1_2,
+ cipher=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) id 15.21.451.35; Wed, 7 Oct 2026
+ 19:17:26 +0000
+Resent-From: <user@hotmail.com>
+Received: from AM6P250MB1342.EURP250.PROD.OUTLOOK.COM ([::1]) by
+ AM6P250MB1342.EURP250.PROD.OUTLOOK.COM ([fe80::f454:183e:41b3:d2ce%5]) with
+ Microsoft SMTP Server id 15.21.0496.015; Wed, 7 Oct 2026 19:17:26 +0000
+Authentication-Results: mx.microsoft.com 1; spf=pass (sender IP is
+ 89.149.192.182) smtp.mailfrom=shop.example; dkim=pass (signature was verified)
+ header.d=shop.example;dmarc=pass action=none header.from=shop.example;
+Received-SPF: Pass (protection.outlook.com: domain of shop.example designates
+ 89.149.192.182 as permitted sender) receiver=protection.outlook.com;
+ client-ip=89.149.192.182; helo=shop.example;
+To: Some User <user@hotmail.com>
+From: "Shop" <order@shop.example>
+Subject: Fixture: Outlook.com forward to Gigahost
+Date: Wed, 7 Oct 2026 19:17:20 +0000
+Message-ID: <fixture-outlook-forward@example.invalid>
+X-Spam-Level: ***
+
+Invoice body.

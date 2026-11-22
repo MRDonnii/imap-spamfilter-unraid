@@ -1,0 +1,7 @@
+#!/bin/sh
+# sfctl - nødadgang til spamfilteret. Kun fra værten som root:
+#   docker exec -it spamfilter sfctl <kommando>      (sfctl --help for listen)
+# Kører som containerens bruger (uid 10099); se /app/sfctl.py.
+# -s -E: no user site-packages (HOME=/tmp is writable by uid 10099) and no
+# PYTHON* variables, so `sfctl --allow-root` never runs code 10099 planted.
+exec python -s -E /app/sfctl.py "$@"

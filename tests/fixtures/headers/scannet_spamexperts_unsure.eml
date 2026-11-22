@@ -1,0 +1,55 @@
+Return-Path: <news@mail.shop.example>
+Delivered-To: user@example-a.dk
+Received: from scan3.mf.scannet.dk ([10.2.85.13])
+	by box11.mf.scannet.dk with LMTP
+	id CLCXAEHHhmqW8hkAwj4nug
+	(envelope-from <news@mail.shop.example>)
+	for <user@example-a.dk>; Thu, 20 Aug 2026 11:22:09 +0200
+Received: from localhost (localhost [127.0.0.1])
+	by scan3.mf.scannet.dk (Postfix) with ESMTP id 010641800601
+	for <user@example-a.dk>; Thu, 20 Aug 2026 11:22:09 +0200 (CEST)
+X-Virus-Scanned: amavis at scan3.mf.scannet.dk
+X-Spam-Flag: NO
+X-Spam-Score: -99.997
+X-Spam-Level:
+X-Spam-Status: No, score=-99.997 tagged_above=-999 required=8
+ tests=[HTML_MESSAGE=0.001, SPF_HELO_NONE=0.001, SPF_NONE=0.001,
+ SSO_SPAMEXPERTS=-99, SSO_ZC_IP=-1] autolearn=disabled
+Received: from scan3.mf.scannet.dk ([127.0.0.1])
+ by localhost (scan3.mf.scannet.dk [127.0.0.1]) (amavis, port 10024)
+ with ESMTP id nlQGIwqGG3ZS for <user@example-a.dk>;
+ Thu, 20 Aug 2026 11:22:07 +0200 (CEST)
+Received: from node10.spamfilter.io (node10.spamfilter.io [89.188.78.66])
+	(using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits)
+	 key-exchange X25519 server-signature RSA-PSS (2048 bits) server-digest SHA256)
+	(No client certificate requested)
+	by scan3.mf.scannet.dk (Postfix) with ESMTPS id EE67A18005B2
+	for <user@example-a.dk>; Thu, 20 Aug 2026 11:22:07 +0200 (CEST)
+Received: from mail-out.shop.example ([45.145.226.54] helo=mail.shop.example)
+	by node10.spamfilter.io with esmtps  (TLS1.3) tls TLS_AES_256_GCM_SHA384
+	(Exim 4.94.2)
+	(envelope-from <news@mail.shop.example>)
+	id 1wwyyK-000D0v-1Q
+	for user@example-a.dk; Thu, 20 Aug 2026 11:22:07 +0200
+Received: from webmail.shop.example (localhost [127.0.0.1])
+	by mail.shop.example (Postfix) with ESMTPS id A8CCB462D0
+	for <user@example-a.dk>; Thu, 20 Aug 2026 09:22:03 +0000 (UTC)
+From: Shop <news@mail.shop.example>
+To: user@example-a.dk
+Subject: Fixture: SpamExperts relayed via Scannet (unsure, newsletter)
+Date: Thu, 20 Aug 2026 09:22:02 +0000
+Message-ID: <fixture-spamexperts-unsure@example.invalid>
+X-Spam: No
+Authentication-Results: node10.spamfilter.io; iprev=pass (forged.bank.example) smtp.remote-ip=45.145.226.54
+X-Spamfilter.io-Class: ham
+Authentication-Results: node10.spamfilter.io;
+	iprev=pass (mail-out.shop.example) smtp.remote-ip=45.145.226.54;
+	spf=pass (best guess record for domain) smtp.mailfrom=mail.shop.example;
+	dmarc=pass header.from=mail.shop.example
+X-Filter-Label: newsletter
+X-Spamfilter.io-Class: unsure
+X-Spamfilter.io-Evidence: Combined (0.56)
+X-Recommended-Action: accept
+X-Filter-ID: 9kzQTOBWQUFZTohSKvQbgLC7QwLHmvMhIz/t+ESMGTXBejk5IwO6ZPKaqvpFIXTURE
+
+Body.

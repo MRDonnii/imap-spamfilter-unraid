@@ -1,0 +1,20 @@
+Return-Path: <SRS1=Fbun=mail.fwd-example-net.dk==6UXA=IF=orig.example=info@gigahost.dk>
+X-Original-To: user@example-a.dk
+Delivered-To: user@example-a.dk
+Received: from mx2.gigahost.dk (mx2.gigahost.dk [46.183.139.12])
+	by mailstore4.gigahost.dk (Postfix) with ESMTPS id AFEB69410DC0
+	for <user@example-a.dk>; Thu, 15 Oct 2026 23:21:49 +0000 (UTC)
+Received: from mail.fwd-example-net.dk (mail.fwd-example-net.dk [198.51.100.25])
+	by mx2.gigahost.dk (Postfix) with ESMTPS id 85A8739F44
+	for <user@example-a.dk>; Thu, 15 Oct 2026 23:21:45 +0000 (UTC)
+Received: from out.orig.example (out.orig.example [192.0.2.80])
+	by mail.fwd-example-net.dk (Postfix) with ESMTPS id 3993269B49C
+	for <user@example-a.dk>; Fri, 16 Oct 2026 01:21:42 +0200 (CEST)
+From: Orig <info@orig.example>
+To: Old Address <user@example-a.dk>
+Subject: Fixture: classic SRS forward from another domain (addressed to us)
+Date: Fri, 16 Oct 2026 01:21:40 +0200
+Message-ID: <fixture-gigahost-srs0-forward@example.invalid>
+X-Spam-Level: *
+
+Body.

@@ -1,0 +1,21 @@
+Return-Path: <SRS0=ElL/=IJ=eu.sparkpostmail1.com=msprvs1=20752hMlC8P0H=bounces-7356@gigahost.dk>
+X-Original-To: user@example-a.dk
+Delivered-To: user@example-a.dk
+Received: from mx3.gigahost.dk (mx3.gigahost.dk [46.183.139.13])
+	by mailstore4.gigahost.dk (Postfix) with ESMTPS id 5765F9410D6F
+	for <user@example-a.dk>; Mon, 19 Oct 2026 11:00:08 +0000 (UTC)
+Received: from mta-253-222-184.smtp-out.sparkpostmail.com (mta-253-222-184.smtp-out.sparkpostmail.com [147.253.222.184])
+	by mx3.gigahost.dk (Postfix) with ESMTPS id 197B131E21
+	for <user@example-a.dk>; Mon, 19 Oct 2026 11:00:03 +0000 (UTC)
+Authentication-Results:  i-090409271e5df35e0.mta3vsmtp.sd.prd.sparkpost smtp.user=<hidden>; auth=pass (PLAIN)
+Received: from [20.240.223.52] ([20.240.223.52:62037] helo=ppj-vm-producti)
+	by i-090409271e5df35e0.mta3vsmtp.sd.prd.sparkpost (envelope-from <user@outbound.ohd.dk>)
+	(ecelerity 5.3.0.76471 r(msys-ecelerity:tags/5.3.0.24)) with ESMTPSA (cipher=AES-256-GCM) 
+	id 88/D4-64539-238F5DA6; Mon, 19 Oct 2026 11:00:02 +0000
+From: user@outbound.ohd.dk
+To: user@example-a.dk
+Subject: Fixture: SRS0 with '=' in the local part, ESMTPSA below the external hop
+Date: Mon, 19 Oct 2026 11:00:02 +0000
+Message-ID: <fixture-gigahost-sparkpost@example.invalid>
+
+Body.

@@ -1,0 +1,29 @@
+# 2.12 (#7): automatic update PRs (never auto-merged - every bump goes
+# through CI, the smoke test and a normal release).
+# - pip: filter/requirements.txt (exact pins; the AIO Dockerfile installs
+#   the same pins, so a merged bump reaches the image on the next build)
+# - docker: filter/Dockerfile.unraid (FROM with digest). The AIO image pins
+#   live in deploy/versions.env (ARG-based FROMs, which Dependabot cannot
+#   read) and are re-resolved by hand monthly.
+# - github-actions: the workflow actions.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /filter
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      python:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /filter
+    schedule:
+      interval: monthly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

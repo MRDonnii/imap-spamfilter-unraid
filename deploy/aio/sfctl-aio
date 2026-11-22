@@ -1,0 +1,14 @@
+#!/bin/sh
+# sfctl in the all-in-one container: `docker exec -it spamfilter sfctl ...`
+# runs as root by default there (supervisord needs root as PID 1's child),
+# but sfctl must run as the filter user (uid 10099, owner of /state and
+# /config). Root is switched to 10099 with setpriv; --allow-root keeps
+# root (sfctl itself then refuses, because /state is a link into /appdata).
+# -s -E: no user site-packages and no PYTHON* variables (as filter/sfctl).
+if [ "$(id -u)" = 0 ]; then
+  for a in "$@"; do
+    [ "$a" = --allow-root ] && exec /usr/local/bin/python -s -E /app/sfctl.py "$@"
+  done
+  exec setpriv --reuid=10099 --regid=10099 --clear-groups -- /usr/local/bin/python -s -E /app/sfctl.py "$@"
+fi
+exec /usr/local/bin/python -s -E /app/sfctl.py "$@"

@@ -1,0 +1,24 @@
+imapclient==3.1.0
+PyYAML==6.0.3
+requests==2.34.1
+Flask==3.1.3
+waitress==3.0.2
+# 2.11.1 security pins: the pinned base image ships certifi 2026.5.20,
+# urllib3 2.7.0, Werkzeug 3.1.8 and Flask 3.1.2, all with known
+# vulnerabilities (OSV). The images replace exactly these four (and
+# dnspython below) with the patched pure-Python wheels, --no-deps.
+certifi==2026.11.20
+urllib3==2.8.0
+Werkzeug==3.1.9
+# 2.5.0 push notifications (filter/webpush.py: VAPID ES256 + RFC 8291 aes128gcm).
+# Exact pins with manylinux wheels for Python 3.12-3.14; the image installs
+# ONLY these three lines, the security pins above and dnspython below (the
+# base image already pins the other packages above).
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.12
+# 2.7 Mailsikkerhed (filter/mailcheck.py: DNS checks against the stack's own
+# Unbound). Pure-Python wheel without dependencies, exact pin; installed
+# with --no-deps --only-binary like the push wheels.
+dnspython==2.9.2
+Pillow==13.0.0

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Health of the all-in-one container (filter/aio_health.py): check | wait | listeners
+exec /usr/local/bin/python3 -s -E /app/aio_health.py "$@"

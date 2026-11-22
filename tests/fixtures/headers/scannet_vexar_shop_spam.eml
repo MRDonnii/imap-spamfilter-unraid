@@ -1,0 +1,41 @@
+Return-Path: <SRS0=N7BF=IH=gazeta.example=support@mail.vexar.example>
+Received: from scan3.mf.scannet.dk ([10.2.85.13])
+	by box11.mf.scannet.dk with LMTP
+	id yL9kH7in02rmhAMAwj4nug
+	(envelope-from <SRS0=N7BF=IH=gazeta.example=support@mail.vexar.example>); Sat, 17 Oct 2026 18:52:08 +0200
+Received: from localhost (localhost [127.0.0.1])
+	by scan3.mf.scannet.dk (Postfix) with ESMTP id 7BA33181297C
+	for <user@example-b.dk>; Sat, 17 Oct 2026 18:52:08 +0200 (CEST)
+X-Virus-Scanned: amavis at scan3.mf.scannet.dk
+X-Spam-Flag: NO
+X-Spam-Score: 5.85
+X-Spam-Level: *****
+X-Spam-Status: No, score=5.85 tagged_above=-999 required=8
+ tests=[HEADER_FROM_DIFFERENT_DOMAINS=0.25, HTML_MESSAGE=0.001,
+ MIME_HTML_ONLY=0.1, RCVD_IN_SBL_CSS=4, SPF_HELO_PASS=-0.001, SPF_PASS=-0.001,
+ SSO_GOOGLE_LINK=1.5, TVD_PH_BODY_ACCOUNTS_PRE=0.001] autolearn=disabled
+Received: from scan3.mf.scannet.dk ([127.0.0.1])
+ by localhost (scan3.mf.scannet.dk [127.0.0.1]) (amavis, port 10024)
+ with ESMTP id z_7ARFe8DNKL for <user@example-b.dk>;
+ Sat, 17 Oct 2026 18:52:07 +0200 (CEST)
+Received: from mail.vexar.example (mail.vexar.example [203.0.113.109])
+	(using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits)
+	 key-exchange X25519 server-signature RSA-PSS (2048 bits) server-digest SHA256)
+	(No client certificate requested)
+	by scan3.mf.scannet.dk (Postfix) with ESMTPS id 73CBD1811D80
+	for <user@example-b.dk>; Sat, 17 Oct 2026 18:52:07 +0200 (CEST)
+Received: from gazeta.example (97.54.162.34.bc.googleusercontent.com [34.162.54.97])
+	by mail.vexar.example (Postfix) with SMTP id 04D3669B004
+	for <info@shop-a.example>; Sat, 17 Oct 2026 18:52:05 +0200 (CEST)
+Authentication-Results: mail.vexar.example;
+	dkim=none;
+	spf=none (mail.vexar.example: domain of support@gazeta.example has no SPF policy when checking 34.162.54.97) smtp.mailfrom=support@gazeta.example;
+	dmarc=fail reason="No valid SPF, No valid DKIM" header.from=gazeta.example (policy=none)
+From: Billing Watch <billing@gazeta.example>
+To: info@shop-a.example
+Subject: Fixture: spam to a shop mailbox, forwarded by the owner's MX to Scannet
+Message-ID: <fixture-scannet-vexar-shop-spam@example.invalid>
+X-Spamd-Bar: ++++++++++++
+X-Spam: Yes
+
+Spam body.

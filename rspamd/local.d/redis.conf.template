@@ -1,0 +1,6 @@
+# rspamd Redis client config. Rendered by deploy/init-host.sh into
+# redis.conf with the password substituted from state/redis.password
+# (the same value init-host.sh writes into the redis server config).
+servers = "spamfilter-redis:6379";
+timeout = 1s;
+password = "${REDIS_PASSWORD}";

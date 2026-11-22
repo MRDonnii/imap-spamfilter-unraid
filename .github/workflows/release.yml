@@ -1,0 +1,135 @@
+name: release
+
+# Push a tag like v2.4.0 -> tests, the ALL-IN-ONE image is built ONCE from
+# pinned inputs (REDIS_AIO_DIGEST must be set), smoke-tested, and exactly
+# that tested image is pushed to GHCR (private package) as :<version> and
+# :beta, and a GitHub release marked as pre-release (Beta) is created.
+# Promote to a stable release by hand when the owner says the version is
+# finished.
+# 2.4: only the all-in-one image is published; the filter-only image of
+# the 4-container layout is built in ci.yml but never pushed.
+# Releases are signed locally (deploy/sign-release.sh) and the WebUI update builds the image on the host,
+# so this only runs when started by hand.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: |
+          python -m pip install -r filter/requirements.txt pytest
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          python -m pytest -q
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # GHCR image names must be lowercase (the owner name is not).
+      - id: v
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          grep -qx "VERSION=$version" deploy/versions.env ||
+            { echo "tag $GITHUB_REF_NAME does not match VERSION in deploy/versions.env" >&2; exit 1; }
+          # A release is built only from pinned inputs: the Redis build image too.
+          grep -Eqx 'REDIS_AIO_DIGEST=sha256:[0-9a-f]{64}' deploy/versions.env ||
+            { echo "REDIS_AIO_DIGEST is not pinned in deploy/versions.env" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      # 2.10 Opdateringer: the source package deploy/update-runner.sh installs
+      # (it checks the sha256 against this .sha256 file AND GitHub's asset digest).
+      - name: Source package for the WebUI update
+        run: |
+          version="${{ steps.v.outputs.version }}"
+          pkg="spamfilter-$version-source.tar.gz"
+          git archive --format=tar.gz --prefix="spamfilter-$version/" -o "$RUNNER_TEMP/$pkg" HEAD
+          (cd "$RUNNER_TEMP" && sha256sum "$pkg" > "$pkg.sha256" && cat "$pkg.sha256")
+          echo "pkg=$RUNNER_TEMP/$pkg" >> "$GITHUB_ENV"
+      # 2.12 (#16): sign the .sha256 file (ssh-keygen -Y, namespace
+      # spamfilter-release) with the secret SF_RELEASE_SIGNING_KEY and check it
+      # against deploy/release-signers. Without the secret the release is
+      # published unsigned and the owner signs it afterwards with
+      # deploy/sign-release.sh (update-runner refuses unsigned releases from
+      # RELEASE_SIGNED_SINCE on). Package and signature are made BEFORE the
+      # image is built and pushed: a wrong key fails the release before
+      # anything reaches GHCR (no image without a GitHub release).
+      - name: Sign the checksum file
+        env:
+          SIGNING_KEY: ${{ secrets.SF_RELEASE_SIGNING_KEY }}
+        run: |
+          if [[ -z "$SIGNING_KEY" ]]; then
+            echo "::warning::SF_RELEASE_SIGNING_KEY is not set - sign this release with deploy/sign-release.sh $GITHUB_REF_NAME"
+            exit 0
+          fi
+          umask 077
+          key="$RUNNER_TEMP/release-sign.key"
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          ssh-keygen -Y sign -q -f "$key" -n spamfilter-release "$pkg.sha256"
+          rm -f "$key"
+          ssh-keygen -Y verify -f deploy/release-signers -I spamfilter-release -n spamfilter-release \
+            -s "$pkg.sha256.sig" < "$pkg.sha256"
+      - name: Stage the build context
+        id: ctx
+        run: |
+          deploy/aio/build.sh --context-only "$RUNNER_TEMP/aio-ctx"
+          {
+            echo 'args<<EOF'
+            cat "$RUNNER_TEMP/aio-ctx/build-args.env"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+      - name: Build the all-in-one image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/aio-ctx
+          file: ${{ runner.temp }}/aio-ctx/Dockerfile
+          build-args: ${{ steps.ctx.outputs.args }}
+          push: false
+          load: true
+          tags: |
+            ${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }}
+            ${{ steps.v.outputs.image }}:beta
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Smoke test before publishing
+        run: |
+          app="$RUNNER_TEMP/sfapp"
+          mkdir -p "$app/operations"
+          sudo env SPAMFILTER_APP="$app" SF_AIO_CPUS="$(nproc)" SF_AIO_MEMORY=2g SF_GATE_MIN_UPTIME=10 SF_CLAMAV=0 \
+            deploy/aio/smoke-test.sh --fresh --learn-test --image "${{ steps.v.outputs.image }}:${{ steps.v.outputs.version }}"
+      # Publish EXACTLY the image that passed the smoke test (the loaded
+      # one) - never a second build.
+      - name: Push the tested image to GHCR
+        run: |
+          image="${{ steps.v.outputs.image }}"
+          version="${{ steps.v.outputs.version }}"
+          tested="$(docker image inspect --format '{{.Id}}' "$image:$version")"
+          [[ "$(docker image inspect --format '{{.Id}}' "$image:beta")" == "$tested" ]]
+          docker push "$image:$version"
+          docker push "$image:beta"
+          echo "published $image:$version and :beta = image $tested"
+          docker run --rm --entrypoint cat "$image:$version" /usr/local/share/spamfilter-aio/packages.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            ${{ env.pkg }}
+            ${{ env.pkg }}.sha256
+            ${{ env.pkg }}.sha256.sig

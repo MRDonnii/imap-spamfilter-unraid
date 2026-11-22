@@ -1,0 +1,83 @@
+# Optional: brings the same four containers up via Compose Manager.
+# The recommended install path on Unraid is via Community Applications
+# (one template per container). See unraid/*.xml and README.md.
+
+x-logging: &log-rotate
+  driver: json-file
+  options:
+    max-size: 50m
+    max-file: "5"
+
+services:
+  spamfilter-redis:
+    image: redis:8-alpine
+    container_name: spamfilter-redis
+    restart: unless-stopped
+    logging: *log-rotate
+    volumes:
+      - /mnt/user/appdata/spamfilter/redis:/data
+      # Server config dir (persistence, memory cap, requirepass) is
+      # rendered into redis-config/ by unraid/bootstrap.sh - run that
+      # script before bringing the stack up. A directory is mounted,
+      # not the single file, so Unraid's template path mapping is happy.
+      - /mnt/user/appdata/spamfilter/redis-config:/usr/local/etc/redis:ro
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    networks: [spamnet]
+
+  spamfilter-unbound:
+    image: mvance/unbound:latest
+    container_name: spamfilter-unbound
+    restart: unless-stopped
+    logging: *log-rotate
+    networks: [spamnet]
+
+  spamfilter-rspamd:
+    image: rspamd/rspamd:latest
+    container_name: spamfilter-rspamd
+    restart: unless-stopped
+    logging: *log-rotate
+    depends_on: [spamfilter-redis, spamfilter-unbound]
+    # worker-controller.inc is rendered on the host by bootstrap.sh
+    # before this container starts, so no entrypoint override is needed.
+    volumes:
+      - /mnt/user/appdata/spamfilter/rspamd/local.d:/etc/rspamd/local.d:ro
+      - /mnt/user/appdata/spamfilter/rspamd/data:/var/lib/rspamd
+    networks: [spamnet]
+
+  spamfilter:
+    build: ./filter
+    image: ghcr.io/marcelverdult/imap-spamfilter:latest
+    container_name: spamfilter
+    restart: unless-stopped
+    logging: *log-rotate
+    depends_on: [spamfilter-rspamd]
+    volumes:
+      - /mnt/user/appdata/spamfilter/accounts.yml:/app/accounts.yml:ro
+      - /mnt/user/appdata/spamfilter/state:/state
+    environment:
+      - RSPAMD_SCAN_URL=http://spamfilter-rspamd:11333/checkv2
+      - RSPAMD_LEARN_URL=http://spamfilter-rspamd:11334
+      - RSPAMD_PASSWORD=${RSPAMD_PASSWORD:-}
+      - STATE_DIR=/state
+      - LOG_LEVEL=INFO
+      - TZ=Europe/Berlin
+      # Optional read-only web dashboard with a login form. Configure
+      # users via DASHBOARD_USERS - comma-separated name:hash pairs;
+      # generate a hash with `docker exec -it spamfilter python
+      # dashboard.py`. (Legacy single-user DASHBOARD_USER +
+      # DASHBOARD_PASSWORD still works.) The container always listens
+      # internally on 8080; map a host port in the ports: block below.
+      # - DASHBOARD_USERS=${DASHBOARD_USERS:-}
+      # - DASHBOARD_USER=${DASHBOARD_USER:-}
+      # - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+    # ports:
+    #   - "8080:8080"
+    # Healthcheck baked into the image (see filter/Dockerfile). Compose
+    # used to shadow it with a shell-string form that broke under Unraid
+    # `--health-cmd`; the image definition works the same everywhere.
+    networks: [spamnet]
+
+networks:
+  spamnet:
+    name: spamnet
+    driver: bridge

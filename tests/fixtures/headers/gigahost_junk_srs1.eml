@@ -1,0 +1,29 @@
+Return-Path: <SRS1=Fbun=mail.vexar.example==6UXA=IF=lastchance.guru=user@gigahost.dk>
+X-Original-To: user@example-a.dk
+Delivered-To: user@example-a.dk
+Received: from mx2.gigahost.dk (mx2.gigahost.dk [46.183.139.12])
+	by mailstore4.gigahost.dk (Postfix) with ESMTPS id AFEB69410DC0
+	for <user@example-a.dk>; Thu, 15 Oct 2026 23:21:49 +0000 (UTC)
+Received: from mail.vexar.example (mail.vexar.example [203.0.113.109])
+	by mx2.gigahost.dk (Postfix) with ESMTPS id 85A8739F44
+	for <user@example-a.dk>; Thu, 15 Oct 2026 23:21:45 +0000 (UTC)
+Received: from mail.gadgetoutlet.shop (mail.gadgetoutlet.shop [62.173.146.164])
+	by mail.vexar.example (Postfix) with ESMTP id 3993269B49C
+	for <user@example-d.dk>; Fri, 16 Oct 2026 01:21:42 +0200 (CEST)
+Authentication-Results: mail.vexar.example;
+	dkim=none;
+	spf=pass (mail.vexar.example: domain of user@lastchance.guru designates 62.173.146.164 as permitted sender) smtp.mailfrom=user@lastchance.guru;
+	dmarc=none
+Received: from mail.gadgetoutlet.shop (labe.tilabe.autos [185.225.69.39])
+	by mail.gadgetoutlet.shop (Postfix) with ESMTPA id 53BEE85805;
+	Fri, 16 Oct 2026 00:17:58 +0300 (EEST)
+From: "Kinzo" <user@lastchance.guru>
+To: user@example-d.dk
+Subject: Fixture: SRS1 via third-party forwarder
+Date: Fri, 16 Oct 2026 00:17:57 +0300
+Message-ID: <fixture-gigahost-srs1@example.invalid>
+X-Spamd-Bar: ++++++++++
+X-Spam-Level: ************
+X-Spam: Yes
+
+Spam body.

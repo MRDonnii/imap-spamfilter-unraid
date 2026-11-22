@@ -1,0 +1,47 @@
+Return-Path: <user@elekworld.cn>
+Delivered-To: user@example-b.dk
+Received: from scan3.mf.scannet.dk ([10.2.85.13])
+	by box11.mf.scannet.dk with LMTP
+	id SOIYJp511moBsxMAwj4nug
+	(envelope-from <user@elekworld.cn>)
+	for <user@example-b.dk>; Mon, 19 Oct 2026 21:55:10 +0200
+Received: from localhost (localhost [127.0.0.1])
+	by scan3.mf.scannet.dk (Postfix) with ESMTP id 9AE2018FB324
+	for <user@example-b.dk>; Mon, 19 Oct 2026 21:55:10 +0200 (CEST)
+X-Virus-Scanned: amavis at scan3.mf.scannet.dk
+X-Spam-Flag: YES
+X-Spam-Score: 8.007
+X-Spam-Level: ********
+X-Spam-Status: Yes, score=8.007 tagged_above=-999 required=8
+ tests=[HTML_MESSAGE=0.001, HTML_MIME_NO_HTML_TAG=0.635, MIME_HTML_ONLY=0.1,
+ SPF_HELO_NONE=0.001, SPF_SOFTFAIL=2, SSO_BAD_TLD_LINK=2,
+ SSO_EMAIL_IN_LINK=0.25, SSO_FRMTLD=2, SSO_LINK_SHORTENER=0.5,
+ SSO_SUSP_TLD_FROM_3=0.5, T_KAM_HTML_FONT_INVALID=0.01, URIBL_MFRBL_SUSP=0.01]
+ autolearn=disabled
+Received: from scan3.mf.scannet.dk ([127.0.0.1])
+ by localhost (scan3.mf.scannet.dk [127.0.0.1]) (amavis, port 10024)
+ with ESMTP id bBkP3-3a7AEW for <user@example-b.dk>;
+ Mon, 19 Oct 2026 21:55:08 +0200 (CEST)
+Received: from mail.elekworld.com (mail.elekworld.com [150.242.228.48])
+	(using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+	(No client certificate requested)
+	by scan3.mf.scannet.dk (Postfix) with ESMTPS id 7E1CE18FB326
+	for <user@example-b.dk>; Mon, 19 Oct 2026 21:55:08 +0200 (CEST)
+Received: from MB210.elekworld.cn (mb210.elekworld.cn [172.16.20.230])
+	by mail.elekworld.com (Mail Balance Service Hicom System) with ESMTPS id A01BD4003132
+	for <user@example-b.dk>; Tue, 20 Oct 2026 03:55:03 +0800 (CST)
+Received: from mail1.elekworld.com (unknown [172.16.20.239])
+	by MB210.elekworld.cn (Mail Balance Service of Hicom System) with ESMTPS id 9340581F6820
+	for <user@example-b.dk>; Tue, 20 Oct 2026 03:55:03 +0800 (CST)
+Received: by mail1.elekworld.com (HicomMail, from userid 103)
+	id A296881F5259; Tue, 20 Oct 2026 03:55:03 +0800 (CST)
+Received: from localhost (unknown [172.16.20.221])
+	by mail1.elekworld.com (HicomMail) with ESMTPA id 5338D801A3EE
+	for <user@example-b.dk>; Tue, 20 Oct 2026 03:55:03 +0800 (CST)
+From: Diana-elekworld <user@elekworld.cn>
+To: user@example-b.dk
+Subject: Fixture: Scannet junk with X-Spam-Flag: YES
+Date: Tue, 20 Oct 2026 03:55:02 +0800
+Message-ID: <fixture-scannet-junk@example.invalid>
+
+Spam body.

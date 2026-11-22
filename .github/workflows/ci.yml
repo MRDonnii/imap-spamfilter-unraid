@@ -1,0 +1,136 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: filter/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install -r filter/requirements.txt pytest qrcode
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck libzbar0 poppler-utils gpgv
+      - name: Syntax checks
+        run: |
+          python -m py_compile filter/*.py deploy/aio/aio_render.py
+          for f in deploy/*.sh deploy/aio/*.sh filter/sfctl deploy/aio/sf-run deploy/aio/sf-entrypoint \
+                   deploy/aio/sf-fatal-listener deploy/aio/sfctl-aio deploy/aio/sf-health deploy/aio/sf-clamav; do
+            bash -n "$f"
+          done
+          shellcheck -x deploy/*.sh deploy/aio/*.sh deploy/aio/sf-run deploy/aio/sf-entrypoint \
+            deploy/aio/sf-fatal-listener deploy/aio/sfctl-aio deploy/aio/sf-health deploy/aio/sf-clamav
+      - name: Test suite
+        run: python -m pytest -q
+
+  # 2.12 (#7) supply chain: known vulnerabilities in the pinned Python
+  # requirements (pip-audit, PyPI advisory database). The frozen image is
+  # audited in aio-image below (pip-audit on its installed packages + Trivy).
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: pip-audit filter/requirements.txt
+        run: |
+          python -m pip install pip-audit==2.10.1
+          pip-audit --strict -r filter/requirements.txt
+
+  # The filter-only image of the 4-container layout (rollback path): built,
+  # never pushed.
+  filter-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build filter-only image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./filter
+          file: ./filter/Dockerfile.unraid
+          push: false
+          tags: imap-spamfilter-unraid:ci-filter
+
+  # The 2.4 all-in-one image: built (no push) and smoke-tested - started on
+  # a generated, empty app dir (no accounts), all four parts must become
+  # healthy, a test mail is scanned and learned, the container is restarted
+  # and the learned count must survive. 2.7: SF_CLAMAV=0 - no ~300 MB
+  # signature download in CI (the smoke test checks that ClamAV reports off
+  # and rspamd's antivirus is disabled); clamd itself is verified offline by
+  # build-check.sh during the image build (config parse + a self-test with a
+  # test-only signature over INSTREAM).
+  aio-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Stage the build context
+        id: ctx
+        run: |
+          deploy/aio/build.sh --context-only "$RUNNER_TEMP/aio-ctx"
+          {
+            echo 'args<<EOF'
+            cat "$RUNNER_TEMP/aio-ctx/build-args.env"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+      - name: Build all-in-one image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/aio-ctx
+          file: ${{ runner.temp }}/aio-ctx/Dockerfile
+          build-args: ${{ steps.ctx.outputs.args }}
+          push: false
+          load: true
+          tags: imap-spamfilter-unraid:ci
+      - name: Smoke test (fresh app dir, no accounts)
+        run: |
+          app="$RUNNER_TEMP/sfapp"
+          mkdir -p "$app/operations"
+          sudo env SPAMFILTER_APP="$app" SF_AIO_CPUS="$(nproc)" SF_AIO_MEMORY=2g SF_GATE_MIN_UPTIME=10 SF_CLAMAV=0 \
+            deploy/aio/smoke-test.sh --fresh --learn-test --image imap-spamfilter-unraid:ci
+      # 2.12 (#7): the frozen image - every Python distribution in it, checked
+      # with pip-audit (exact versions, no resolution), and Trivy on the whole
+      # image (OS packages + language packages): HIGH/CRITICAL with a fix fail
+      # the build. Trivy is a pinned release binary checked by sha256 (no
+      # third-party action). Accepted exceptions go in .trivyignore with a reason.
+      - name: pip-audit the frozen image
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/python imap-spamfilter-unraid:ci -c \
+            'import importlib.metadata as m; print("\n".join(sorted({"%s==%s" % (d.metadata["Name"], d.version) for d in m.distributions()})))' \
+            > "$RUNNER_TEMP/frozen.txt"
+          cat "$RUNNER_TEMP/frozen.txt"
+          if grep -qi '^pip==' "$RUNNER_TEMP/frozen.txt"; then echo "pip found in the frozen image" >&2; exit 1; fi
+          python3 -m pip install --user pip-audit==2.10.1
+          ~/.local/bin/pip-audit --no-deps --disable-pip -r "$RUNNER_TEMP/frozen.txt"
+      - name: Trivy image scan (HIGH/CRITICAL with a fix fail)
+        env:
+          TRIVY_VERSION: 0.76.2
+          TRIVY_SHA256: bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+        run: |
+          tgz="$RUNNER_TEMP/trivy.tar.gz"
+          curl -fsSL -o "$tgz" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "$TRIVY_SHA256  $tgz" | sha256sum -c -
+          tar -xzf "$tgz" -C "$RUNNER_TEMP" trivy
+          "$RUNNER_TEMP/trivy" image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --ignorefile .trivyignore --exit-code 1 --no-progress imap-spamfilter-unraid:ci
+      - name: Container log on failure
+        if: failure()
+        run: docker logs spamfilter-aio-test 2>&1 | tail -n 200 || true

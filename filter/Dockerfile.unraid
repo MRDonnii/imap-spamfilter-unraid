@@ -1,0 +1,102 @@
+# spamfilter filter-only image (the 4-container layout).
+#
+# 2.4: production runs the all-in-one image from deploy/aio/Dockerfile
+# (filter + rspamd + Redis + Unbound in one container 'spamfilter'). This
+# image stays for the 4-container layout (rollback after the migration,
+# deploy/recreate-filter.sh) and is built in CI, never published; its tag
+# carries the suffix -filter so it can never be mistaken for the AIO image.
+#
+# Build (from the source dir on Unraid, tag from deploy/versions.env):
+#   docker build -t imap-spamfilter-unraid:2.14.1-filter -f filter/Dockerfile.unraid filter
+# (deploy/recreate-filter.sh --build does exactly this.)
+#
+# The base is the pinned upstream image (Python 3.14 + Flask/waitress/
+# IMAPClient/PyYAML/requests); 2.5.0 adds the pinned 'cryptography' wheels
+# from requirements.txt (push notifications). Keep the digest in sync with
+# FILTER_BASE_IMAGE in deploy/versions.env (tests/test_deploy_scripts.py
+# checks this).
+FROM ghcr.io/marcelverdult/imap-spamfilter@sha256:11b10295f03a7eb503c7cf40a370334f33a902ca3470b28ce1a344a2bed85f7c
+
+USER root
+
+COPY requirements.txt /tmp/requirements.txt
+# 2.5.0 push notifications: 'cryptography' (+ cffi, pycparser) at the exact
+# versions pinned in requirements.txt - wheels only, no build tools, no
+# dependency resolution (the base image already provides everything else).
+# 2.7 Mailsikkerhed: 'dnspython' the same way (pure-Python, no dependencies).
+# 2.8 (A3) QR codes: 'Pillow' the same way (manylinux wheel, its own libraries;
+# libzbar0 + poppler-utils come from apt in the all-in-one image).
+# 2.11.1 security: 'certifi', 'urllib3', 'Werkzeug' and 'Flask' the same way - the
+# pinned base ships older versions with known vulnerabilities; the installed
+# versions are checked against requirements.txt.
+RUN set -eu; \
+    grep -E '^(cryptography|cffi|pycparser)==' /tmp/requirements.txt > /tmp/requirements-push.txt; \
+    test "$(wc -l < /tmp/requirements-push.txt)" -eq 3; \
+    python -m pip install --no-cache-dir --disable-pip-version-check --no-deps --only-binary=:all: \
+        -r /tmp/requirements-push.txt; \
+    python -c 'import cryptography.hazmat.primitives.asymmetric.ec, cryptography.hazmat.primitives.ciphers.aead'; \
+    grep -E '^dnspython==' /tmp/requirements.txt > /tmp/requirements-dns.txt; \
+    test "$(wc -l < /tmp/requirements-dns.txt)" -eq 1; \
+    python -m pip install --no-cache-dir --disable-pip-version-check --no-deps --only-binary=:all: \
+        -r /tmp/requirements-dns.txt; \
+    python -c 'import dns.message, dns.query, dns.flags, dns.rcode, dns.rdatatype'; \
+    grep -E '^Pillow==' /tmp/requirements.txt > /tmp/requirements-qr.txt; \
+    test "$(wc -l < /tmp/requirements-qr.txt)" -eq 1; \
+    python -m pip install --no-cache-dir --disable-pip-version-check --no-deps --only-binary=:all: \
+        -r /tmp/requirements-qr.txt; \
+    python -c 'import PIL.Image, PIL.PngImagePlugin, PIL.JpegImagePlugin'; \
+    grep -E '^(certifi|urllib3|Werkzeug|Flask)==' /tmp/requirements.txt > /tmp/requirements-sec.txt; \
+    test "$(wc -l < /tmp/requirements-sec.txt)" -eq 4; \
+    python -m pip install --no-cache-dir --disable-pip-version-check --no-deps --only-binary=:all: \
+        -r /tmp/requirements-sec.txt; \
+    python -c 'import sys, importlib.metadata as m; want = dict(l.strip().split("==") for l in open(sys.argv[1])); got = {k: m.version(k) for k in want}; assert got == want, got; import flask, werkzeug, urllib3, certifi, requests' /tmp/requirements-sec.txt; \
+    rm -f /tmp/requirements.txt /tmp/requirements-push.txt /tmp/requirements-dns.txt /tmp/requirements-qr.txt /tmp/requirements-sec.txt
+
+# Code is root-owned and read-only for the runtime user, so a compromised
+# process cannot persist by rewriting its own code. Tests are excluded via
+# Dockerfile.unraid.dockerignore; the rm below covers builders that ignore
+# that file; admin.py (1.x, removed in 2.0) is dropped in case the base
+# image ships one. The named user only makes `id`/ps output readable.
+COPY *.py /app/
+COPY static/ /app/static/
+COPY favicon.png /app/favicon.png
+# Family guide (Hjælp -> "Hent familieguiden (PDF)", login required);
+# regenerate with .build/make-familieguide.sh after editing FAMILIEGUIDE.md.
+COPY familieguide.pdf /app/familieguide.pdf
+# Break-glass admin CLI (no port, no WebUI route): only whoever has root on
+# the host can reach it with `docker exec -it spamfilter sfctl <cmd>`. It
+# runs as the container user (10099) and refuses root without --allow-root.
+COPY sfctl /usr/local/bin/sfctl
+RUN set -eu; \
+    rm -f /app/test_*.py /app/*_test.py /app/admin.py; \
+    rm -rf /app/__pycache__; \
+    chown -R root:root /app; \
+    find /app -type d -exec chmod 0755 {} +; \
+    find /app -type f -exec chmod 0644 {} +; \
+    chown root:root /usr/local/bin/sfctl; \
+    chmod 0755 /usr/local/bin/sfctl; \
+    getent group 10099 >/dev/null || groupadd --system --gid 10099 spamfilter; \
+    getent passwd 10099 >/dev/null || useradd --system --uid 10099 --gid 10099 \
+        --no-create-home --home-dir /tmp --shell /usr/sbin/nologin spamfilter; \
+    mkdir -p /state /config; \
+    chown 10099:10099 /state /config; \
+    chmod 0700 /state /config
+
+ENV HOME=/tmp \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+USER 10099:10099
+WORKDIR /app
+
+# Heartbeat fresh + tied to this run + /healthz 200 (see healthcheck.py).
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD ["python", "/app/healthcheck.py"]
+
+ENTRYPOINT ["python", "-u", "filter.py"]
+
+LABEL org.opencontainers.image.title="imap-spamfilter-unraid" \
+      org.opencontainers.image.description="spamfilter 2.0 (pinned upstream base, local engine and WebUI)" \
+      org.opencontainers.image.version="2.14.1-unraid" \
+      org.opencontainers.image.vendor="imap-spamfilter-unraid" \
+      org.opencontainers.image.source="local:<app dir>/source"

@@ -1,0 +1,235 @@
+#!/bin/bash
+# Entrypoint of the all-in-one spamfilter container (2.4), run by tini.
+#
+#   1. /appdata must be the bind-mounted app dir (the 4-container layout:
+#      config/ state/ rspamd/ redis/ redis-config/ ...), and /var/lib/rspamd
+#      must be its rspamd/data (the rspamd base image declares a VOLUME
+#      there - without the mapping Docker would hide rspamd's data in an
+#      anonymous volume).
+#   2. A FRESH app dir (no state/, config/, redis-config/) is initialised
+#      (aio_render.py init). An existing install is never modified.
+#   3. Every part's files are checked AS ITS OWN UID (root has no
+#      CAP_DAC_OVERRIDE here): 10099 state/config, 999:1000 redis,
+#      11333 rspamd. Nothing is ever chowned.
+#   4. The runtime configs for 127.0.0.1 are rendered into the tmpfs
+#      /run/spamfilter (rspamd local.d copy, unbound.conf) and validated
+#      (unbound-checkconf, rspamadm configtest). The shared files in
+#      /appdata stay byte-for-byte unchanged, so a rollback to the four
+#      containers keeps working.
+#   5. 2.6: the optional /backup mount (encrypted nightly backups, written
+#      by the filter as uid 10099). Docker creates a missing bind source as
+#      an empty root:root dir: exactly that top dir is handed to 10099 -
+#      nothing inside it, nothing else. Without the mount the filter warns.
+#   6. 2.7 ClamAV (SF_CLAMAV, default on): the signature dir
+#      <app dir>/clamav (uid/gid 3310, 0750) is created when missing - the
+#      only new path this script ever makes in an existing app dir - and the
+#      socket dir /run/spamfilter/clamav is handed to clamav:rspamd-aio.
+#      Anything in the way (not creatable, wrong owner, a link) only
+#      switches virus scanning off for this run, with a warning: the
+#      container always starts. SF_CLAMAV=0 skips clamd/freshclam (low-RAM
+#      installs) and renders antivirus.conf as 'enabled = false'. The
+#      decision goes to /run/spamfilter/clamav.state (sf-health; 'on db' /
+#      'on nodb' = signatures already there or not, 'off <reason>') and to
+#      SF_CLAMAV_AUTOSTART (supervisord.conf autostart=).
+#   7. exec supervisord (deploy/aio/supervisord.conf).
+#
+# Env: SF_CLAMAV=0 (no ClamAV; default 1),
+#      SPAMFILTER_AIO_SKIP_MOUNT_CHECK=1 (build check / tests only),
+#      SPAMFILTER_AIO_SKIP_CONFIGTEST=1 (faster start, not recommended),
+#      SF_AIO_* path overrides (tests only; never set in the image).
+# Never prints a secret: configtest output is filtered and shortened.
+set -euo pipefail
+umask 022
+
+APPDATA=${SF_AIO_APPDATA:-/appdata}
+RUN_DIR=${SF_AIO_RUN_DIR:-/run/spamfilter}
+LIB=${SF_AIO_LIB:-/usr/local/lib/spamfilter-aio}
+SHARE=${SF_AIO_SHARE:-/usr/local/share/spamfilter-aio}
+PY=${SF_AIO_PY:-/usr/local/bin/python3}
+RSPAMD_DB=${SF_AIO_RSPAMD_DB:-/var/lib/rspamd}
+ROOT_KEY=${SF_AIO_ROOT_KEY:-/usr/share/dns/root.key}
+SUPERVISORD=${SF_AIO_SUPERVISORD:-/usr/bin/supervisord}
+BACKUP=${SF_AIO_BACKUP_DIR:-/backup}
+CLAMAV_DB="$APPDATA/clamav"
+CLAMAV_UID=3310
+
+log() { printf '[init] %s\n' "$*"; }
+die() { printf '[init] ERROR: %s\n' "$*" >&2; exit 1; }
+# as UID GID CMD...: run as the owner of the files (no root bypass here).
+as() { local uid=$1 gid=$2; shift 2; setpriv --reuid="$uid" --regid="$gid" --clear-groups -- "$@"; }
+same_dir() { # as UID GID A B: same inode?
+  local a b
+  a="$(as "$1" "$2" stat -L -c '%d:%i' "$3" 2>/dev/null)" || return 1
+  b="$(as "$1" "$2" stat -L -c '%d:%i' "$4" 2>/dev/null)" || return 1
+  [[ "$a" == "$b" ]]
+}
+# Show a failed validator's last lines without anything that could be a secret.
+show_tail() { grep -viE 'pass|secret|requirepass' | tail -n 12 | cut -c1-200 >&2 || true; }
+
+[[ "$(id -u)" == 0 ]] || die "the container must start as root (supervisord gives every part its own uid)"
+log "Spamfilter all-in-one $(cat "$SHARE/VERSION" 2>/dev/null || echo '?') starting"
+
+# ---------------------------------------------------------------- 1. mounts
+if [[ "${SPAMFILTER_AIO_SKIP_MOUNT_CHECK:-0}" != 1 ]]; then
+  mountpoint -q "$APPDATA" ||
+    die "$APPDATA is not mounted - map the app dir (e.g. /mnt/user/appdata/spamfilter) to /appdata"
+fi
+
+# ---------------------------------------------------------------- 2. fresh app dir
+"$PY" -s -E "$LIB/aio_render.py" init --appdata "$APPDATA" --bundle "$SHARE" ||
+  die "initialising the app dir failed"
+
+# ---------------------------------------------------------------- 3. layout per uid
+need() { # need UID GID TEST PATH WHAT
+  as "$1" "$2" test "$3" "$4" ||
+    die "$4 ($5) is missing or not accessible for uid $1 - the all-in-one container reuses the 4-container owners (10099 state/config, 999:1000 redis, 11333 rspamd); never chown"
+}
+need 10099 10099 -w "$APPDATA/state" "filter state"
+need 10099 10099 -r "$APPDATA/config/accounts.yml" "accounts"
+need 999 1000 -w "$APPDATA/redis" "Redis data"
+need 999 1000 -r "$APPDATA/redis-config/redis.conf" "Redis config"
+need 11333 11333 -r "$APPDATA/rspamd/local.d/redis.conf" "rspamd Redis client config"
+need 11333 11333 -w "$APPDATA/rspamd/data" "rspamd data"
+if [[ "${SPAMFILTER_AIO_SKIP_MOUNT_CHECK:-0}" != 1 ]]; then
+  same_dir 11333 11333 "$RSPAMD_DB" "$APPDATA/rspamd/data" ||
+    die "$RSPAMD_DB is not $APPDATA/rspamd/data - add -v <app dir>/rspamd/data:/var/lib/rspamd (template path 'rspamd data')"
+fi
+
+# ---------------------------------------------------------------- 6. ClamAV (2.7; decided before the runtime config)
+# clamav_off REASON: no clamd/freshclam this run (the container still starts).
+clamav=on clamav_reason=""
+clamav_off() { clamav=off; clamav_reason=$1; }
+case "${SF_CLAMAV:-1}" in
+  0|false|no|off) clamav_off "SF_CLAMAV=0" ;;
+esac
+if [[ "$clamav" == on ]]; then
+  if [[ -L "$CLAMAV_DB" ]]; then
+    clamav_off "$CLAMAV_DB is a symlink"
+  elif [[ ! -e "$CLAMAV_DB" ]]; then
+    # New dir (first 2.7 start): mode first, owner last (see rundir below).
+    if mkdir "$CLAMAV_DB" 2>/dev/null && chmod 0750 "$CLAMAV_DB" && chown "$CLAMAV_UID:$CLAMAV_UID" "$CLAMAV_DB"; then
+      log "ClamAV: created $CLAMAV_DB (uid $CLAMAV_UID, 0750) - the first signature download takes a few minutes"
+    else
+      clamav_off "cannot create $CLAMAV_DB"
+    fi
+  elif ! as "$CLAMAV_UID" "$CLAMAV_UID" test -d "$CLAMAV_DB" -a -w "$CLAMAV_DB"; then
+    clamav_off "$CLAMAV_DB is not writable for uid $CLAMAV_UID (fix: chown $CLAMAV_UID:$CLAMAV_UID <app dir>/clamav)"
+  fi
+fi
+# 2.7 fix: are the signatures already there? (sf-health wait clamav: the
+# filter only waits for clamd at start when they are - the very first
+# download takes minutes, the antivirus re-scans catch up afterwards.)
+clamav_db=nodb
+# shellcheck disable=SC2016 # $1/$p expand inside the clamav uid's sh, not here
+if [[ "$clamav" == on ]] &&
+  as "$CLAMAV_UID" "$CLAMAV_UID" sh -c 'for p in main daily; do [ -s "$1/$p.cvd" ] || [ -s "$1/$p.cld" ] || exit 1; done' \
+    sh "$CLAMAV_DB"; then
+  clamav_db=db
+fi
+if [[ "$clamav" == on ]]; then
+  log "ClamAV: on (signatures in $CLAMAV_DB$([[ $clamav_db == db ]] || echo ' - not downloaded yet'))"
+elif [[ "$clamav_reason" == "SF_CLAMAV=0" ]]; then
+  log "ClamAV: off (SF_CLAMAV=0) - mails are not virus-scanned"
+else
+  log "WARNING: ClamAV is off for this run: $clamav_reason - mails are not virus-scanned"
+fi
+
+# ---------------------------------------------------------------- 4. runtime config
+mkdir -p "$RUN_DIR"
+chmod 0755 "$RUN_DIR"
+# Mode first, owner last: with --cap-drop ALL root keeps CHOWN but not FOWNER,
+# so it cannot chmod a directory once it belongs to another uid ('install -o -m'
+# does chown and then chmod and fails). A dir already handed over is left alone.
+rundir() { # rundir OWNER MODE PATH
+  [[ "$3" == "$RUN_DIR/"* ]] || die "rundir: $3 is outside $RUN_DIR"
+  mkdir -p "$3"
+  if [[ -O "$3" ]]; then # still ours (fresh tmpfs): mode first, then hand it over
+    chmod "$2" "$3"
+    chown "$1" "$3"
+  fi
+}
+rundir 11333:11333 0750 "$RUN_DIR/rspamd"
+rundir unbound:unbound 0750 "$RUN_DIR/unbound"
+rundir root:root 1777 "$RUN_DIR/run"
+av_args=()
+if [[ "$clamav" == on ]]; then
+  # clamd's socket dir: clamd (owner) and rspamd (group) only.
+  rundir "$CLAMAV_UID:11333" 0750 "$RUN_DIR/clamav"
+  # 2.8 (A1): sf-sigs' status (no secrets) for the WebUI and the health pages.
+  rundir "$CLAMAV_UID:$CLAMAV_UID" 0755 "$RUN_DIR/sigs"
+else
+  av_args=(--no-antivirus)
+fi
+if [[ "$clamav" == on ]]; then
+  printf 'on %s\n' "$clamav_db" >"$RUN_DIR/clamav.state"
+else
+  printf '%s %s\n' "$clamav" "$clamav_reason" >"$RUN_DIR/clamav.state"
+fi
+chmod 0644 "$RUN_DIR/clamav.state"
+
+# The local site configuration (config/site.yml: own domains, webshops, DNS
+# forwarder - never in the image) is READ as the filter uid into a plain
+# site.json for rspamd and unbound. A missing or broken file never stops
+# the start: empty lists + a warning (the WebUI says "Lokal opsætning
+# mangler"). Nothing here writes config/.
+rundir 10099:10099 0755 "$RUN_DIR/site"
+as 10099 10099 "$PY" -s -E "$LIB/aio_render.py" site \
+  --config "$APPDATA/config/site.yml" --out "$RUN_DIR/site" ||
+  log "WARNING: the local site config could not be read - own domains are not in the rspamd maps"
+
+# 2.7 fix: --antivirus-src: the image's own antivirus.conf, used when the app
+# dir only has the 4-container layout's disabled copy (deploy/lib.sh).
+as 11333 11333 "$PY" -s -E "$LIB/aio_render.py" rspamd \
+  --src "$APPDATA/rspamd/local.d" --dst "$RUN_DIR/rspamd/local.d" \
+  --site "$RUN_DIR/site/site.json" \
+  --antivirus-src "$SHARE/rspamd/antivirus.conf" "${av_args[@]}" ||
+  die "rendering the rspamd config failed"
+as unbound unbound "$PY" -s -E "$LIB/aio_render.py" unbound \
+  --src "$APPDATA/unbound.conf" --fallback "$SHARE/unbound.conf" \
+  --forward "$APPDATA/unbound-forward-records.conf" \
+  --site "$RUN_DIR/site/site.json" \
+  --dir "$RUN_DIR/unbound" --dst "$RUN_DIR/unbound/unbound.conf" \
+  --root-key "$ROOT_KEY" ||
+  die "rendering the unbound config failed"
+
+out="$(as unbound unbound unbound-checkconf "$RUN_DIR/unbound/unbound.conf" 2>&1)" || {
+  printf '%s\n' "$out" | show_tail
+  die "unbound-checkconf failed"
+}
+if [[ "${SPAMFILTER_AIO_SKIP_CONFIGTEST:-0}" != 1 ]]; then
+  out="$(as 11333 11333 rspamadm configtest 2>&1)" || true
+  if ! grep -q 'syntax OK' <<<"$out"; then
+    printf '%s\n' "$out" | show_tail
+    die "rspamadm configtest failed - the app dir was not changed"
+  fi
+  log "rspamd configtest: syntax OK"
+fi
+
+# ---------------------------------------------------------------- 5. /backup (2.6)
+case "$BACKUP/" in
+  "$APPDATA"/*) die "$BACKUP lies inside $APPDATA - the backups must go to another disk" ;;
+esac
+if [[ -d "$BACKUP" ]] && mountpoint -q "$BACKUP"; then
+  if as 10099 10099 test -w "$BACKUP"; then
+    log "encrypted nightly backups go to $BACKUP"
+  elif [[ -O "$BACKUP" && ! -L "$BACKUP" && -z "$(ls -A "$BACKUP" 2>/dev/null)" ]]; then
+    # Fresh, empty, root-owned (made by Docker): mode first, owner last (see rundir).
+    chmod 0700 "$BACKUP"
+    chown 10099:10099 "$BACKUP"
+    log "encrypted nightly backups go to $BACKUP (empty dir handed to uid 10099)"
+  else
+    log "WARNING: $BACKUP is not writable for uid 10099 - no encrypted backups until the host dir is fixed: chown 10099:10099 <host dir>"
+  fi
+else
+  log "no $BACKUP mount - encrypted nightly backups are off (Unraid template path 'Backup-placering', see BACKUP.md)"
+fi
+
+# ---------------------------------------------------------------- 7. supervisord
+if [[ "$clamav" == on ]]; then
+  export SF_CLAMAV_AUTOSTART=true
+  log "starting redis, unbound, rspamd, the filter, clamd and freshclam (supervisord)"
+else
+  export SF_CLAMAV_AUTOSTART=false
+  log "starting redis, unbound, rspamd and the filter (supervisord; no ClamAV)"
+fi
+exec "$SUPERVISORD" -n -c /etc/spamfilter/supervisord.conf

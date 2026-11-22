@@ -1,0 +1,8 @@
+# Build-context filter for Dockerfile.unraid (BuildKit picks up
+# <Dockerfile>.dockerignore automatically). Only runtime code goes in.
+**/__pycache__
+**/*.pyc
+test_*.py
+*_test.py
+Dockerfile*
+.pytest_cache

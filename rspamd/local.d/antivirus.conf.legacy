@@ -1,0 +1,11 @@
+# spamfilter 2.7 - antivirus for the OLD 4-container layout
+# (separate rspamd, Redis, Unbound and filter containers).
+#
+# There is no clamd in that layout: the real antivirus.conf would point
+# rspamd at /run/spamfilter/clamav/clamd.sock, which does not exist there,
+# and every mail would wait for a dead socket and get CLAM_VIRUS_FAIL.
+# deploy/lib.sh (sf_install_rspamd_config) installs THIS file as
+# antivirus.conf unless SF_LAYOUT=aio. The all-in-one container replaces it
+# with its own copy at every start (aio_render.py --antivirus-src), so a
+# migrated install scans for viruses from its first start.
+enabled = false;

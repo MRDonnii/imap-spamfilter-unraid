@@ -1,0 +1,58 @@
+Return-Path: <SRS0=Zx9q=IK=vexar.example=support@mail.vexar.example>
+Delivered-To: user@example-b.dk
+Received: from scan1.mf.scannet.dk ([10.2.85.10])
+	by box11.mf.scannet.dk with LMTP
+	id bQ7XFkNwqmrInQgAwj4nug
+	(envelope-from <SRS0=Zx9q=IK=vexar.example=support@mail.vexar.example>)
+	for <user@example-b.dk>; Tue, 20 Oct 2026 12:32:35 +0200
+Received: from localhost (localhost [127.0.0.1])
+	by scan1.mf.scannet.dk (Postfix) with ESMTP id 525FE1800602
+	for <user@example-b.dk>; Tue, 20 Oct 2026 12:32:35 +0200 (CEST)
+X-Virus-Scanned: amavis at scan1.mf.scannet.dk
+X-Spam-Flag: NO
+X-Spam-Score: -96.1
+X-Spam-Level:
+X-Spam-Status: No, score=-96.1 tagged_above=-999 required=8
+ tests=[DKIM_INVALID=0.1, SPF_FAIL=4.5, SSO_SPAMEXPERTS=-100] autolearn=disabled
+Received: from scan1.mf.scannet.dk ([127.0.0.1])
+ by localhost (scan1.mf.scannet.dk [127.0.0.1]) (amavis, port 10024)
+ with ESMTP id kVLZSw84r9Zw for <user@example-b.dk>;
+ Tue, 20 Oct 2026 12:32:29 +0200 (CEST)
+Received: from node1.spamfilter.io (node1.spamfilter.io [94.231.106.10])
+	(using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits)
+	 key-exchange X25519 server-signature RSA-PSS (2048 bits) server-digest SHA256)
+	(No client certificate requested)
+	by scan1.mf.scannet.dk (Postfix) with ESMTPS id BAF821800603
+	for <user@example-b.dk>; Tue, 20 Oct 2026 12:32:29 +0200 (CEST)
+Received: from www-data by node1.spamfilter.io with local (Exim 4.94.2)
+	(envelope-from <SRS0=Zx9q=IK=vexar.example=support@mail.vexar.example>)
+	id 1vU0T9-007ntZ-RU
+	for user@example-b.dk; Tue, 20 Oct 2026 12:32:28 +0200
+Received: from mail.vexar.example ([203.0.113.109])
+	by node2.spamfilter.io with esmtps  (TLS1.3) tls TLS_AES_256_GCM_SHA384
+	(Exim 4.94.2)
+	(envelope-from <SRS0=Zx9q=IK=vexar.example=support@mail.vexar.example>)
+	id 1vL1Gr-00ATwU-Ul
+	for user@example-b.dk; Tue, 20 Oct 2026 11:30:01 +0200
+Received: from mail-sender-5.vexar.example (mail-sender-5.vexar.example [203.0.113.35])
+	(using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits))
+	(No client certificate requested)
+	by mail.vexar.example (Postfix) with ESMTPS id 9D1C369B004
+	for <info@shop-b.example>; Tue, 20 Oct 2026 11:30:00 +0200 (CEST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=vexar.example; s=default;
+	h=from:to:subject:date:message-id; bh=FIXTUREFIXTUREFIXTURE=; b=FIXTURE
+From: Vexar Shop Support <support@vexar.example>
+To: info@shop-b.example
+Subject: Fixture: platform mail released from SpamExperts quarantine (DKIM broken)
+Date: Tue, 20 Oct 2026 11:29:59 +0200
+Message-ID: <fixture-vexar-shop-release@vexar.example>
+Received-SPF: fail (node2.spamfilter.io: domain of mail.vexar.example does not designate 203.0.113.109) client-ip=203.0.113.109;
+Authentication-Results: node2.spamfilter.io;
+	iprev=pass (mail.vexar.example) smtp.remote-ip=203.0.113.109;
+	dkim=fail header.d=vexar.example
+X-Spamfilter.io-Class: spam
+X-Spamfilter.io-Evidence: Combined (0.81)
+X-Recommended-Action: reject
+X-Filter-ID: 9kzQTOBWQUFZTohSKvQbgLC7QwLHmvMhIz/t+ESMGTXBejk5IwO6ZPKaqvpFIXTURE2
+
+Support body.

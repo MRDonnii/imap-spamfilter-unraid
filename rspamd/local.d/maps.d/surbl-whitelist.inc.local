@@ -1,0 +1,34 @@
+# spamfilter 2.2 (B2a): domains the rbl module never looks up in the URL/
+# e-mail/Message-ID blocklists (SURBL, URIBL, SEM, rspamd's own
+# RSPAMD_URIBL ...). rspamd's stock modules.d/rbl.conf already lists this
+# path in url_whitelist; it is a plain "set" map: one domain per line, the
+# exact request string (the registrable domain the rbl module queries).
+#
+# Only single-owner domains and ESP infrastructure belong here. NEVER add a
+# multi-tenant platform (the site config's platform_domains): any shop on
+# it could host phishing. Platforms are handled by the filter
+# (TH_OWN_PLATFORM_URIBL, B2b).
+
+# The owner's own domains are NOT listed here: they come from the local site
+# config (config/site.yml: mail_domains + webshop_domains) and are added to
+# the rendered copy at container start (deploy/aio/aio_render.py).
+
+# Outlook/Exchange Online Message-ID right-hand side (not a real domain;
+# SEM_URIBL lists it via the "mid" selector)
+hxcore.ol
+
+# ESP infrastructure (SEM_URIBL ":mid" and ":from_smtp" hits on Mailjet)
+mailjet.com
+
+# 2.7.6: Klaviyo's shared link, tracking and signing domains. SURBL's abuse
+# list carries manage.kmail-lists.com, so every Klaviyo newsletter got
+# ABUSE_SURBL +5 (a shop's account and licence mails were moved). The
+# shops' own links are still looked up.
+kmail-lists.com
+klclick.com
+klclick1.com
+klclick2.com
+klclick3.com
+klaviyomail.com
+# 2.8 (C1): the DKIM check asks for the exact signing domain
+shared.klaviyomail.com

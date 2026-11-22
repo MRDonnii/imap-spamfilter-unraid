@@ -1,0 +1,20 @@
+# Lokal opsætning af spamfilteret (kun på denne server - aldrig i programmet).
+# Rettes i WebUI'en under Indstillinger -> Lokal opsætning. En opdatering
+# ændrer eller nulstiller aldrig denne fil.
+server_name: ''
+admin_email: ''
+mail_domains: []
+webshop_domains: []
+platform_domains: []
+protected_domains: []
+trusted_forwarders: []
+mailcheck_domains: []
+mailcheck_no_mail: []
+domain_providers: {}
+imap_presets: {}
+lan_url: ''
+dns_forwarders: []
+msgid_domain: ''
+receipt_from: ''
+contacts_key_label: ''
+setup_done: false

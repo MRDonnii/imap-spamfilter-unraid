@@ -1,0 +1,20 @@
+Return-Path: <SRS0=Qw3r=IK=gmail.com=user@gigahost.dk>
+X-Original-To: user@example-a.dk
+Delivered-To: user@example-a.dk
+Received: from mx1.gigahost.dk (mx1.gigahost.dk [46.183.139.11])
+	by mailstore4.gigahost.dk (Postfix) with ESMTPS id 4444444444
+	for <user@example-a.dk>; Tue, 20 Oct 2026 09:00:05 +0000 (UTC)
+Received: from mail-ej1-x62f.google.com (mail-ej1-x62f.google.com [IPv6:2a00:1450:4864:20::62f])
+	(using TLSv1.3 with cipher TLS_AES_128_GCM_SHA256 (128/128 bits))
+	(No client certificate requested)
+	by mx1.gigahost.dk (Postfix) with ESMTPS id 5555555555
+	for <user@example-a.dk>; Tue, 20 Oct 2026 09:00:01 +0000 (UTC)
+Received: by mail-ej1-x62f.google.com with SMTP id a640c23a62f3a-abc123
+        for <user@example-a.dk>; Tue, 20 Oct 2026 02:00:00 -0700 (PDT)
+From: Someone <user@gmail.com>
+To: user@example-a.dk
+Subject: Fixture: IPv6 external hop
+Date: Tue, 20 Oct 2026 09:00:00 +0000
+Message-ID: <fixture-gigahost-ipv6@example.invalid>
+
+Body.

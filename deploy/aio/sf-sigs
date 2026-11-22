@@ -1,0 +1,212 @@
+#!/usr/local/bin/python3 -s
+"""sf-sigs - third-party ClamAV signatures (Sanesecurity) for the all-in-one
+image (2.8, A1). Runs as clamav (uid 3310) under supervisord.
+
+Every SF_SIGS_INTERVAL seconds (default 2 h + up to 10 min jitter;
+Sanesecurity asks for no more than once an hour) each file in FILES is
+fetched from the first mirror that answers, but only when it changed
+(If-Modified-Since). A new file is used only when
+
+  1. its detached GPG signature (.sig) verifies with gpgv against the
+     Sanesecurity key shipped in the image (deploy/aio/clamav/sanesecurity.gpg),
+  2. clamscan loads it without errors (a broken database would stop clamd
+     from reloading),
+
+and is then moved into the signature directory atomically; clamd gets a
+RELOAD once per round. Anything else keeps the previous file. Only lists
+Sanesecurity rates as low false-positive risk; their hits are scored by the
+filter as TH_CLAM_3P (Prøv first), never as a virus.
+
+Status (no secrets): /run/spamfilter/sigs/status.json (0644, dir made by sf-entrypoint).
+"""
+
+from __future__ import annotations
+
+import email.utils
+import json
+import os
+import random
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+MIRRORS = ("https://ftp.swin.edu.au/sanesecurity", "https://mirror.rollernet.us/sanesecurity")
+# Sanesecurity's low false-positive lists (https://sanesecurity.com/usage/signatures/).
+# Signature lists first: the whitelist (.ign2) and file-type magic (.ftm) are
+# load-tested together with them (on their own clamscan finds no database).
+FILES = ("phish.ndb", "scam.ndb", "rogue.hdb", "spamattach.hdb", "spamimg.hdb", "blurl.ndb", "badmacro.ndb",
+         "shelter.ldb", "foxhole_generic.cdb", "porcupine.ndb", "winnow_malware.hdb", "winnow_malware_links.ndb",
+         "malwarehash.hsb", "hackingteam.hsb", "sanesecurity.ftm", "sigwhitelist.ign2")
+DB_DIR = Path(os.environ.get("SF_SIGS_DIR", "/appdata/clamav"))
+KEYRING = Path(os.environ.get("SF_SIGS_KEYRING", "/etc/spamfilter/clamav/sanesecurity.gpg"))
+STATUS = Path(os.environ.get("SF_SIGS_STATUS", "/run/spamfilter/sigs/status.json"))
+SOCKET = os.environ.get("SF_SIGS_CLAMD", "/run/spamfilter/clamav/clamd.sock")
+INTERVAL = int(os.environ.get("SF_SIGS_INTERVAL", "7200"))
+TIMEOUT = 60
+MAX_BYTES = 50 * 2**20
+UA = "spamfilter-sigs/2.8 (+self-hosted)"
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+LAST_MODIFIED: dict[str, float] = {}
+
+
+def _get(url: str, since: float | None = None) -> bytes | None:
+    """Body, or None for 304 Not Modified. Raises on errors. The server's
+    Last-Modified is kept in LAST_MODIFIED[url] (the installed file gets it
+    as mtime, so the next If-Modified-Since asks with the server's date)."""
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    if since:
+        req.add_header("If-Modified-Since", email.utils.formatdate(since, usegmt=True))
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            data = r.read(MAX_BYTES + 1)
+            lm = r.headers.get("Last-Modified")
+    except urllib.error.HTTPError as ex:
+        if ex.code == 304:
+            return None
+        raise
+    if len(data) > MAX_BYTES:
+        raise ValueError("too large")
+    if lm:
+        try:
+            LAST_MODIFIED[url] = email.utils.parsedate_to_datetime(lm).timestamp()
+        except (TypeError, ValueError):
+            pass
+    return data
+
+
+def _verify(tmp: Path, name: str, data: bytes, sig: bytes) -> str | None:
+    """None when the signature and the clamscan load test pass, else why not."""
+    f, s = tmp / name, tmp / f"{name}.sig"
+    f.write_bytes(data)
+    s.write_bytes(sig)
+    p = subprocess.run(["gpgv", "--keyring", str(KEYRING), str(s), str(f)], capture_output=True, timeout=60)
+    if p.returncode != 0:
+        return "GPG-signaturen passer ikke"
+    s.unlink()
+    # Load test of the whole third-party set with the new file in place (a
+    # bad .ftm or a conflict between lists would stop clamd's reload).
+    test = tmp / "loadtest"
+    shutil.rmtree(test, ignore_errors=True)
+    test.mkdir()
+    for other in FILES:
+        cur = DB_DIR / other
+        if other != name and cur.is_file():
+            (test / other).symlink_to(cur)
+    os.replace(f, test / name)
+    probe = tmp / "probe.txt"  # a regular file: clamscan exits 2 for /dev/null
+    probe.write_text("sf-sigs load test\n")
+    try:
+        p = subprocess.run(["clamscan", "--quiet", "--no-summary", f"--database={test}", str(probe)],
+                           capture_output=True, timeout=300)
+    finally:
+        os.replace(test / name, f)
+    if p.returncode not in (0, 1):
+        return f"clamscan kan ikke indlæse listerne (exit {p.returncode})"
+    return None
+
+
+def _reload() -> bool:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+            c.settimeout(10)
+            c.connect(SOCKET)
+            c.sendall(b"zRELOAD\0")
+            return c.recv(64).startswith(b"RELOADING")
+    except OSError:
+        return False
+
+
+def _write_status(st: dict) -> None:
+    try:
+        STATUS.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATUS.with_suffix(".tmp")
+        tmp.write_text(json.dumps(st, ensure_ascii=False))
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, STATUS)
+    except OSError:
+        pass
+
+
+def run_once() -> dict:
+    t0 = time.time()
+    st: dict = {"ts": int(t0), "ok": True, "updated": [], "failed": {}, "files": 0, "mirror": None}
+    with tempfile.TemporaryDirectory(prefix="sf-sigs-") as td:
+        tmp = Path(td)
+        for name in FILES:
+            dst = DB_DIR / name
+            since = dst.stat().st_mtime if dst.is_file() else None
+            why = None
+            for mirror in MIRRORS:
+                try:
+                    data = _get(f"{mirror}/{name}", since)
+                    if data is None:
+                        break  # not modified (an earlier mirror's failure stays reported)
+                    sig = _get(f"{mirror}/{name}.sig")
+                    why = _verify(tmp, name, data, sig or b"")
+                    if why is None:
+                        part = DB_DIR / f".{name}.new"
+                        part.write_bytes(data)
+                        os.chmod(part, 0o644)
+                        lm = LAST_MODIFIED.get(f"{mirror}/{name}")
+                        if lm:
+                            os.utime(part, (lm, lm))
+                        os.replace(part, dst)
+                        why = None
+                        st["updated"].append(name)
+                        st["mirror"] = mirror
+                        (tmp / name).unlink(missing_ok=True)
+                        break
+                    (tmp / name).unlink(missing_ok=True)
+                    continue  # a bad copy on this mirror: try the next one
+                except (OSError, ValueError, subprocess.SubprocessError) as ex:
+                    why = f"{type(ex).__name__}"
+                    continue
+            if why:
+                st["failed"][name] = why
+                st["ok"] = False
+            if dst.is_file():
+                st["files"] += 1
+    if st["updated"]:
+        st["reloaded"] = _reload()
+    st["duration_s"] = round(time.time() - t0, 1)
+    return st
+
+
+def main() -> int:
+    if not KEYRING.is_file() or shutil.which("gpgv") is None or shutil.which("clamscan") is None:
+        log("ERROR: gpgv, clamscan or the Sanesecurity key is missing - no third-party signatures")
+        while True:
+            time.sleep(3600)
+    time.sleep(random.uniform(60, 300))  # let freshclam and clamd start first
+    while True:
+        st = run_once()
+        prev = {}
+        try:
+            prev = json.loads(STATUS.read_text())
+        except (OSError, ValueError):
+            pass
+        st["last_update_ts"] = st["ts"] if st["updated"] else prev.get("last_update_ts")
+        _write_status(st)
+        if st["updated"] or st["failed"]:
+            log(f"Sanesecurity: {len(st['updated'])} opdateret, {len(st['failed'])} fejlede "
+                f"({', '.join(f'{k}: {v}' for k, v in st['failed'].items()) or '-'}), {st['files']} filer i alt"
+                + (f", clamd genindlæst={st.get('reloaded')}" if st["updated"] else ""))
+        time.sleep(INTERVAL + random.uniform(0, 600))
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--once"]:
+        print(json.dumps(run_once()))
+        sys.exit(0)
+    sys.exit(main())

@@ -1,0 +1,47 @@
+#!/bin/bash
+# supervisord event listener for PROCESS_STATE_FATAL (all-in-one container).
+#
+# A program that cannot even be started (supervisord gave up after
+# startretries) must not leave the container half alive: stop supervisord,
+# the container exits and Docker's restart policy (unless-stopped) starts
+# it again. Normal crashes never get here - sf-run backs off and
+# supervisord restarts the program.
+# 2.7: clamd and freshclam are optional - their FATAL is only logged (rspamd
+# scans on without antivirus, CLAM_VIRUS_FAIL; sf-health / sfctl doctor
+# warn). Restart them with: docker exec spamfilter supervisorctl start clamd
+# Protocol: READY on stdout, read one header line + len bytes of payload,
+# answer "RESULT 2\nOK". Messages go to stderr (the container log).
+# Env: SF_SUPERVISOR_PIDFILE (/run/spamfilter/supervisord.pid).
+set -uo pipefail
+
+pidfile=${SF_SUPERVISOR_PIDFILE:-/run/spamfilter/supervisord.pid}
+while :; do
+  printf 'READY\n'
+  IFS= read -r header || exit 0
+  len=0
+  for tok in $header; do
+    case "$tok" in len:*) len=${tok#len:} ;; esac
+  done
+  [[ "$len" =~ ^[0-9]+$ ]] || len=0
+  payload=""
+  if (( len > 0 )); then
+    IFS= read -r -N "$len" payload || true
+  fi
+  proc="?"
+  for tok in $payload; do
+    case "$tok" in processname:*) proc=${tok#processname:} ;; esac
+  done
+  case "$proc" in
+    clamd|freshclam|sigs)
+      printf '[supervisor] %s cannot be started (FATAL) - virus scanning is off until it runs again (supervisorctl start %s); the container keeps running\n' "$proc" "$proc" >&2
+      printf 'RESULT 2\nOK'
+      continue
+      ;;
+  esac
+  printf '[supervisor] %s cannot be started (FATAL) - stopping the container so Docker restarts it\n' "$proc" >&2
+  if [[ -r "$pidfile" ]]; then
+    pid=$(<"$pidfile")
+    [[ "$pid" =~ ^[0-9]+$ ]] && kill -TERM "$pid" 2>/dev/null
+  fi
+  printf 'RESULT 2\nOK'
+done

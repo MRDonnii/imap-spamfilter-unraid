@@ -1,0 +1,53 @@
+Return-Path: <bounces+123-abcd-user=example-a.dk@email.invoice.example>
+Delivered-To: user@example-a.dk
+Received: from scan2.mf.scannet.dk ([10.2.85.12])
+	by box11.mf.scannet.dk with LMTP
+	id GBrSKDJb12oVpRgAwj4nug
+	(envelope-from <bounces+123-abcd-user=example-a.dk@email.invoice.example>)
+	for <user@example-a.dk>; Tue, 20 Oct 2026 10:12:03 +0200
+Received: from localhost (localhost [127.0.0.1])
+	by scan2.mf.scannet.dk (Postfix) with ESMTP id 1A2B31800601
+	for <user@example-a.dk>; Tue, 20 Oct 2026 10:12:03 +0200 (CEST)
+X-Virus-Scanned: amavis at scan2.mf.scannet.dk
+X-Spam-Flag: NO
+X-Spam-Score: -95.398
+X-Spam-Level:
+X-Spam-Status: No, score=-95.398 tagged_above=-999 required=8
+ tests=[DKIM_SIGNED=0.1, DKIM_VALID=-0.1, HTML_MESSAGE=0.001, SPF_FAIL=4.5,
+ SPF_HELO_NONE=0.001, SSO_SPAMEXPERTS=-100, URI_TRUNCATED=0.001]
+ autolearn=disabled
+Received: from scan2.mf.scannet.dk ([127.0.0.1])
+ by localhost (scan2.mf.scannet.dk [127.0.0.1]) (amavis, port 10024)
+ with ESMTP id Qe8sV0dKxW1a for <user@example-a.dk>;
+ Tue, 20 Oct 2026 10:12:02 +0200 (CEST)
+Received: from node4.spamfilter.io (node4.spamfilter.io [46.36.212.34])
+	(using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits)
+	 key-exchange X25519 server-signature RSA-PSS (2048 bits) server-digest SHA256)
+	(No client certificate requested)
+	by scan2.mf.scannet.dk (Postfix) with ESMTPS id 5C6D71800600
+	for <user@example-a.dk>; Tue, 20 Oct 2026 10:12:02 +0200 (CEST)
+Received: from o6.ptr9305.em.invoice.example ([159.183.232.146])
+	by node4.spamfilter.io with esmtps  (TLS1.3) tls TLS_AES_256_GCM_SHA384
+	(Exim 4.94.2)
+	(envelope-from <bounces+123-abcd-user=example-a.dk@email.invoice.example>)
+	id 1xEoDS-009Pov-Ij
+	for user@example-a.dk; Tue, 20 Oct 2026 10:12:01 +0200
+Received: by recvd-6f4d9c7-x2v9k with SMTP id recvd-6f4d9c7-x2v9k-1-6A2B3C4D-5
+	2026-10-20 08:12:00.123456 +0000 UTC m=+1.234
+From: Invoice Service <noreply@invoice.example>
+To: user@example-a.dk
+Subject: Fixture: SpamExperts relayed via Scannet (ham)
+Date: Tue, 20 Oct 2026 08:12:00 +0000
+Message-ID: <fixture-spamexperts-ham@example.invalid>
+Received-SPF: pass (node4.spamfilter.io: domain of email.invoice.example designates 159.183.232.146 as permitted sender) client-ip=159.183.232.146; envelope-from=bounces+123-abcd-user=example-a.dk@email.invoice.example; helo=o6.ptr9305.em.invoice.example;
+Authentication-Results: node4.spamfilter.io;
+	iprev=pass (o6.ptr9305.em.invoice.example) smtp.remote-ip=159.183.232.146;
+	spf=pass smtp.mailfrom=email.invoice.example;
+	dkim=pass header.d=invoice.example header.s=s1 header.a=rsa-sha256
+Authentication-Results: spamfilter.io; spf=pass smtp.mailfrom=bounces+123-abcd-user=example-a.dk@email.invoice.example; dkim=pass header.i=invoice.example
+X-Spamfilter.io-Class: ham
+X-Spamfilter.io-Evidence: SB/global_tokens (0.00977954808814)
+X-Recommended-Action: accept
+X-Filter-ID: 9kzQTOBWQUFZTohSKvQbgBUNW1sn0QVcLICXwaHSgTt+S0d3vlzR6Sm47XvOiXHAFIXTURE
+
+Body.

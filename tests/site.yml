@@ -1,0 +1,48 @@
+# TEST FIXTURE (tests/conftest.py: SITE_CONFIG_PATH) - neutral example values.
+# Lokal opsætning af spamfilteret (kun på denne server - aldrig i programmet).
+# Rettes i WebUI'en under Indstillinger -> Lokal opsætning. En opdatering
+# ændrer eller nulstiller aldrig denne fil.
+server_name: Hjemmeserver
+admin_email: ole@bynet.example
+mail_domains:
+- molt.example
+- bynet.example
+webshop_domains:
+- pinsikbing.example
+- gravisk.example
+platform_domains:
+- vexar.example
+protected_domains:
+- pinsikbing.example
+- gravisk.example
+- vexar.example
+trusted_forwarders:
+- mail.vexar.example
+- 203.0.113.109
+mailcheck_domains:
+- example.org
+mailcheck_no_mail:
+- example.org
+domain_providers:
+  bynet.example: Gigahost
+  molt.example: Scannet
+  gravisk.example: vexar.example
+  pinsikbing.example: vexar.example
+  vexar.example: vexar.example
+  example.org: Cloudflare
+imap_presets:
+  molt.example:
+    imap_host: mail.scannet.dk
+    imap_port: 993
+    provider: Scannet
+  bynet.example:
+    imap_host: imap.gigahost.dk
+    imap_port: 993
+    provider: Gigahost
+lan_url: http://192.168.1.10:18080
+dns_forwarders:
+- 192.168.1.1
+msgid_domain: hjemmeserver.spamfilter
+receipt_from: Spamfilter <noreply@hjemmeserver.invalid>
+contacts_key_label: 'hjemmeserver-contacts-key:'
+setup_done: true

@@ -1,0 +1,34 @@
+# Local runtime / secrets
+.env
+accounts.yml
+rspamd/local.d/worker-controller.inc
+rspamd/local.d/redis.conf
+
+# Per-host data (Unraid appdata)
+state/
+redis-config/
+# redis/ holds the appdata data dir; the checked-in server config
+# template must stay tracked.
+redis/*
+!redis/redis.conf.template
+rspamd/data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# generated build artefacts (screenshots, workflow scratch)
+.build/screenshots/
+.build/wf-*.js
+# deploy/accounts.yml is the starter template used by init-host.sh (no secrets)
+!deploy/accounts.yml

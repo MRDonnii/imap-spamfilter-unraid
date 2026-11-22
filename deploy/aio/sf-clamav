@@ -1,0 +1,59 @@
+#!/bin/bash
+# sf-clamav clamd|freshclam - the two ClamAV programs of the all-in-one
+# container (2.7), started by supervisord through sf-run as the user clamav
+# (uid/gid 3310). supervisord only starts them when SF_CLAMAV is not 0
+# (sf-entrypoint sets SF_CLAMAV_AUTOSTART).
+#
+#   freshclam  execs freshclam in daemon mode (foreground): it downloads the
+#              signatures into the app dir at once and then checks 4 times a
+#              day (deploy/aio/clamav/freshclam.conf).
+#   clamd      waits - without ever exiting, so supervisord never counts a
+#              failed start - until a complete signature set (main + daily)
+#              is in the app dir, then execs clamd. On the very first start
+#              that is the few minutes freshclam needs for ~300 MB; rspamd
+#              keeps scanning meanwhile and marks mails CLAM_VIRUS_FAIL.
+#
+# A ClamAV program that cannot be started never stops the container
+# (sf-fatal-listener ignores clamd/freshclam): virus scanning fails open.
+# Env: SF_CLAMAV_CONF_DIR (/etc/spamfilter/clamav), SF_CLAMAV_DB (/appdata/clamav),
+#      SF_CLAMAV_POLL (10 s), SF_CLAMD (/usr/sbin/clamd), SF_FRESHCLAM (/usr/bin/freshclam).
+set -euo pipefail
+
+conf_dir=${SF_CLAMAV_CONF_DIR:-/etc/spamfilter/clamav}
+db=${SF_CLAMAV_DB:-/appdata/clamav}
+poll=${SF_CLAMAV_POLL:-10}
+
+# A complete set: main and daily, each as .cvd (download) or .cld (updated).
+have_db() {
+  local part
+  for part in main daily; do
+    [[ -s "$db/$part.cvd" || -s "$db/$part.cld" ]] || return 1
+  done
+  return 0
+}
+
+case "${1:-}" in
+  freshclam)
+    [[ -w "$db" ]] || echo "WARNING: $db is not writable for uid $(id -u) - no signature updates"
+    exec "${SF_FRESHCLAM:-/usr/bin/freshclam}" --config-file="$conf_dir/freshclam.conf" --daemon --foreground
+    ;;
+  clamd)
+    if ! have_db; then
+      echo "waiting for the first ClamAV signatures in $db (freshclam is downloading them; mails are scanned without antivirus meanwhile)"
+      waited=0
+      until have_db; do
+        sleep "$poll"
+        waited=$(( waited + poll ))
+        if (( waited % 600 < poll )); then
+          echo "still no ClamAV signatures after $(( waited / 60 )) min - see the [freshclam] lines"
+        fi
+      done
+      echo "signatures are there - starting clamd"
+    fi
+    exec "${SF_CLAMD:-/usr/sbin/clamd}" --config-file="$conf_dir/clamd.conf" --foreground
+    ;;
+  *)
+    echo "usage: sf-clamav clamd|freshclam" >&2
+    exit 2
+    ;;
+esac

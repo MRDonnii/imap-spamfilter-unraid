@@ -1,0 +1,37 @@
+# Read-only use of the public rspamd.com fuzzy storage (+ 2.6: our own
+# local storage, rule "local" below). Installed as
+# local.d/fuzzy_check.conf by the deploy scripts when ENABLE_FUZZY=1.
+#
+# Everything else (SRV-based server discovery "service=fuzzy+rspamd.com",
+# the storage's public encryption key, mumhash, hits_limit and the
+# FUZZY_DENIED/PROB/WHITE map) comes from the image's
+# modules.d/fuzzy_check.conf (rspamd 4.2), merged with this file. Not
+# repeating those keeps them current when the image is updated (the old
+# hard-coded key went stale). read_only: we never teach the shared storage.
+# Needs outbound UDP 11335 from the spamnet bridge.
+enabled = true;
+rule "rspamd.com" {
+    read_only = yes;
+    skip_unknown = yes;
+}
+
+# 2.6 (A2): the filter's OWN fuzzy storage - rspamd's fuzzy worker on
+# 127.0.0.1:11335 inside the rspamd container / the all-in-one image. The
+# filter adds mail a user marked as spam (controller /fuzzyadd, Flag 100,
+# filter/campaigns.py), so later copies of the same campaign score
+# FUZZY_LOCAL_SPAM (weight in groups.conf). Nothing leaves the host. The
+# fuzzy worker must accept updates from 127.0.0.1 (allow_update); if it
+# does not, the filter logs fuzzy_failed and pauses writes for 6 h.
+rule "local" {
+    algorithm = "mumhash";
+    servers = "127.0.0.1:11335";
+    symbol = "FUZZY_LOCAL_UNKNOWN";
+    read_only = no;
+    skip_unknown = yes;
+    fuzzy_map = {
+        FUZZY_LOCAL_SPAM {
+            max_score = 10.0;
+            flag = 100;
+        }
+    }
+}

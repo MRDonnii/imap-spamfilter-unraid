@@ -1,0 +1,37 @@
+Return-Path: <bounce+4-user=example-b.dk@news.ajax.systems>
+Delivered-To: user@example-b.dk
+Received: from scan2.mf.scannet.dk ([10.2.85.12])
+	by box11.mf.scannet.dk with LMTP
+	id WB4MMjVd12rLNBoAwj4nug
+	(envelope-from <bounce+4-user=example-b.dk@news.ajax.systems>)
+	for <user@example-b.dk>; Tue, 20 Oct 2026 14:23:17 +0200
+Received: from localhost (localhost [127.0.0.1])
+	by scan2.mf.scannet.dk (Postfix) with ESMTP id C18961810540
+	for <user@example-b.dk>; Tue, 20 Oct 2026 14:23:17 +0200 (CEST)
+X-Virus-Scanned: amavis at scan2.mf.scannet.dk
+X-Spam-Flag: NO
+X-Spam-Score: -0.101
+X-Spam-Level:
+X-Spam-Status: No, score=-0.101 tagged_above=-999 required=8
+ tests=[DKIMWL_WL_MED=-0.001, DKIM_SIGNED=0.1, DKIM_VALID=-0.1,
+ DKIM_VALID_AU=-0.1, HTML_FONT_LOW_CONTRAST=0.001, HTML_MESSAGE=0.001,
+ SPF_HELO_PASS=-0.001, SPF_PASS=-0.001] autolearn=disabled
+Authentication-Results: scan2.mf.scannet.dk (amavis); dkim=pass (2048-bit key)
+ header.d=news.ajax.systems header.b="QFOdoKO9"; dkim=pass (2048-bit key)
+ header.d=esputnik.com header.b="pNno7Qky"
+Received: from scan2.mf.scannet.dk ([127.0.0.1])
+ by localhost (scan2.mf.scannet.dk [127.0.0.1]) (amavis, port 10024)
+ with ESMTP id fgDRkn7cvlKr for <user@example-b.dk>;
+ Tue, 20 Oct 2026 14:23:16 +0200 (CEST)
+Received: from m21.esputnik.com (m21.esputnik.com [52.17.18.180])
+	(using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+	(No client certificate requested)
+	by scan2.mf.scannet.dk (Postfix) with ESMTPS id 3F802180D63D
+	for <user@example-b.dk>; Tue, 20 Oct 2026 14:23:16 +0200 (CEST)
+From: Ajax Systems <user@news.ajax.systems>
+To: user@example-b.dk
+Subject: Fixture: Scannet normal inbound
+Date: Tue, 20 Oct 2026 14:23:15 +0200
+Message-ID: <fixture-scannet-inbound@example.invalid>
+
+Body.

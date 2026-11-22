@@ -1,0 +1,64 @@
+# Copy to accounts.yml and fill in real credentials.
+# accounts.yml is gitignored. Keep it out of version control.
+#
+# Minimum required per account: name, imap_host, user, password.
+# Every other field falls back to a built-in default
+# (mode=shadow, threshold=8.0, junk_retention_days=10, ...).
+# Full list of overridable keys: see "Configuration reference" in README.md.
+
+# Operating modes (set per-account or in `defaults:`):
+#   shadow - scan + log only, no mailbox writes      <- start here
+#   flag   - shadow + sets \Flagged on suspect mail
+#   move   - flag + MOVEs to Junk after move_grace_seconds
+# Promote shadow -> flag -> move once you trust the scores.
+#
+# Folder discovery (see README "Folder discovery and naming"):
+#   - Hierarchy delimiter is auto-detected on connect (/ vs . vs other).
+#   - Junk/Trash are auto-detected via RFC 6154 SPECIAL-USE flags when
+#     the server advertises them (Apple Mail, Thunderbird, Outlook, etc).
+#   - Junk, Trash, and Junk/{Train,Trained}-{Spam,Ham} are managed.
+#     Filter REFUSES to create Junk/Trash itself (they are user
+#     territory). The four train/trained subfolders are auto-created
+#     under whatever the server reports as Junk via SPECIAL-USE.
+#   - INBOX must already exist (RFC).
+#   - Override with `auto_special_folders: false` + explicit junk/trash.
+
+accounts:
+  - name: your_name
+    imap_host: imap.your-mail-provider.example
+    user: you@your-domain.example
+    password: "REPLACE_ME"
+    # mode: shadow     # default; uncomment to set or change
+    # move_grace_seconds: 0   # mode=move only; 0 = move spam out
+    #                         # instantly (use once Bayes is trained)
+    # bayes_user: shared-pool   # optional; see below
+    # safe_mode_unseen_cap: 100000   # default 500; raise if you
+    #                                # keep many unread mails in Inbox
+
+# Shared Bayes across multiple of your own accounts:
+#   With rspamd's `users_enabled = true` (this project's default) the Bayes
+#   classifier keys tokens by recipient, so each account trains its own
+#   filter. To pool training across several of YOUR accounts while keeping
+#   other users (family, roommates) isolated, set `bayes_user` to the same
+#   string on every account that should share data. Family accounts can
+#   omit the field and stay isolated under their own IMAP user.
+#
+#   accounts:
+#     - name: marcel_main
+#       user: marcel@verdult.de
+#       password: "..."
+#       bayes_user: marcel-pool      # shared
+#     - name: marcel_work
+#       user: work@verdult.de
+#       password: "..."
+#       bayes_user: marcel-pool      # shared (same value)
+#     - name: family_member
+#       user: kid@verdult.de
+#       password: "..."
+#       # no bayes_user -> isolated, keyed by kid@verdult.de
+
+# Optional: shared overrides for all accounts above. Most users don't need this.
+# Per-account values still take precedence.
+# defaults:
+#   threshold: 9.0
+#   junk_retention_days: 30

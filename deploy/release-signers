@@ -1,0 +1,10 @@
+# 2.12 (#16): who may sign a release (ssh-keygen allowed_signers format).
+# deploy/update-runner.sh checks spamfilter-X.Y.Z-source.tar.gz.sha256.sig
+# of every release it installs against this file (from the RUNNING
+# source/): a wrong signature is always refused; a missing one only for
+# versions older than RELEASE_SIGNED_SINCE (deploy/release-signing.env).
+# No key line here = signatures are not checked (as before 2.12).
+# The private key never goes into the repository: release.yml signs with the
+# GitHub secret SF_RELEASE_SIGNING_KEY, or the owner signs by hand with
+# deploy/sign-release.sh (see SECURITY.md, "Signerede opdateringer").
+spamfilter-release namespaces="spamfilter-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILcrh4HlfiiDUQEAGGY8K+iX2mERKkWPiVsSuK0ab4/0

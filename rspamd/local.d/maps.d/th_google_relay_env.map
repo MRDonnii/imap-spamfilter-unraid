@@ -1,0 +1,4 @@
+# 2.7.6: Google's relay for mail "sent" by a Gmail user through a Google
+# service (envelope sender @maestro.bounces.google.com). Seen only on
+# account/file phishing from random Gmail addresses.
+maestro.bounces.google.com

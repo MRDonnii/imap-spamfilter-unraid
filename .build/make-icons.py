@@ -1,0 +1,36 @@
+from playwright.sync_api import sync_playwright
+GRAD = '''<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+  <stop offset="0" stop-color="#8b5cf6"/><stop offset=".46" stop-color="#6366f1"/><stop offset="1" stop-color="#06b6d4"/></linearGradient>
+<radialGradient id="hi" cx=".22" cy=".12" r=".75"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+<linearGradient id="env" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c3aed"/><stop offset="1" stop-color="#0891b2"/></linearGradient>
+<filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#1e1b4b" flood-opacity=".42"/></filter>'''
+def art(scale=1.0):
+    t = f'translate(512 512) scale({scale}) translate(-512 -512)'
+    return f'''<g transform="{t}">
+  <path filter="url(#sh)" fill="#fff" d="M512 150 C602 214 706 236 812 242 L812 520 C812 712 688 826 512 890 C336 826 212 712 212 520 L212 242 C318 236 422 214 512 150 Z"/>
+  <rect x="340" y="400" width="344" height="250" rx="40" fill="url(#env)"/>
+  <path d="M368 436 L512 548 L656 436" fill="none" stroke="#fff" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+</g>'''
+def svg(kind):
+    if kind == "any":      # rounded tile, transparent corners
+        bg = '<rect x="0" y="0" width="1024" height="1024" rx="228" fill="url(#bg)"/><rect width="1024" height="1024" rx="228" fill="url(#hi)"/>'
+        a = art(0.92)
+    elif kind == "maskable":  # full bleed, artwork inside the 80% safe zone
+        bg = '<rect width="1024" height="1024" fill="url(#bg)"/><rect width="1024" height="1024" fill="url(#hi)"/>'
+        a = art(0.74)
+    else:                  # apple: full bleed, iOS rounds the corners
+        bg = '<rect width="1024" height="1024" fill="url(#bg)"/><rect width="1024" height="1024" fill="url(#hi)"/>'
+        a = art(0.9)
+    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs>{GRAD}</defs>{bg}{a}</svg>'
+outs = [("icon-512.png", 512, "any"), ("icon-192.png", 192, "any"), ("icon-maskable-512.png", 512, "maskable"),
+        ("icon-maskable-192.png", 192, "maskable"), ("apple-touch-icon.png", 180, "apple"), ("logo.png", 128, "any"),
+        ("favicon-64.png", 64, "any")]
+with sync_playwright() as p:
+    b = p.chromium.launch(executable_path="/usr/bin/google-chrome", args=["--no-sandbox"])
+    for name, size, kind in outs:
+        pg = b.new_page(viewport={"width": size, "height": size}, device_scale_factor=1)
+        pg.set_content(f'<html><body style="margin:0;background:transparent">{svg(kind).replace("<svg ", f"<svg width=\"{size}\" height=\"{size}\" ")}</body></html>')
+        pg.screenshot(path=f"/tmp/sfq/logo/{name}", omit_background=(kind == "any"), clip={"x": 0, "y": 0, "width": size, "height": size})
+    open("/tmp/sfq/logo/logo.svg", "w").write(svg("any"))
+    b.close()
+print("ok")

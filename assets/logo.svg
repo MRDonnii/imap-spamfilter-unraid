@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+  <stop offset="0" stop-color="#8b5cf6"/><stop offset=".46" stop-color="#6366f1"/><stop offset="1" stop-color="#06b6d4"/></linearGradient>
+<radialGradient id="hi" cx=".22" cy=".12" r=".75"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+<linearGradient id="env" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c3aed"/><stop offset="1" stop-color="#0891b2"/></linearGradient>
+<filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#1e1b4b" flood-opacity=".42"/></filter></defs><rect x="0" y="0" width="1024" height="1024" rx="228" fill="url(#bg)"/><rect width="1024" height="1024" rx="228" fill="url(#hi)"/><g transform="translate(512 512) scale(0.92) translate(-512 -512)">
+  <path filter="url(#sh)" fill="#fff" d="M512 150 C602 214 706 236 812 242 L812 520 C812 712 688 826 512 890 C336 826 212 712 212 520 L212 242 C318 236 422 214 512 150 Z"/>
+  <rect x="340" y="400" width="344" height="250" rx="40" fill="url(#env)"/>
+  <path d="M368 436 L512 548 L656 436" fill="none" stroke="#fff" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+</g></svg>

@@ -1,0 +1,55 @@
+Return-Path: <info@promo.example>
+Delivered-To: user@example-a.dk
+Received: from scan1.mf.scannet.dk ([10.2.85.10])
+	by box11.mf.scannet.dk with LMTP
+	id aPOXFkNwqmrInQgAwj4nug
+	(envelope-from <info@promo.example>)
+	for <user@example-a.dk>; Wed, 16 Sep 2026 12:32:35 +0200
+Received: from localhost (localhost [127.0.0.1])
+	by scan1.mf.scannet.dk (Postfix) with ESMTP id 425FE1800602
+	for <user@example-a.dk>; Wed, 16 Sep 2026 12:32:35 +0200 (CEST)
+X-Virus-Scanned: amavis at scan1.mf.scannet.dk
+X-Spam-Flag: NO
+X-Spam-Score: -76.249
+X-Spam-Level:
+X-Spam-Status: No, score=-76.249 tagged_above=-999 required=8
+ tests=[HTML_IMAGE_ONLY_28=0.726, MIXED_HREF_CASE=1.999, RCVD_IN_MFRBL_BAD=10,
+ SPF_FAIL=4.5, SSO_SPAMEXPERTS=-99, URIBL_BLACK=5.525] autolearn=disabled
+Received: from scan1.mf.scannet.dk ([127.0.0.1])
+ by localhost (scan1.mf.scannet.dk [127.0.0.1]) (amavis, port 10024)
+ with ESMTP id jVLZSw84r9Zw for <user@example-a.dk>;
+ Wed, 16 Sep 2026 12:32:29 +0200 (CEST)
+Received: from node1.spamfilter.io (node1.spamfilter.io [94.231.106.10])
+	(using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits)
+	 key-exchange X25519 server-signature RSA-PSS (2048 bits) server-digest SHA256)
+	(No client certificate requested)
+	by backup-mx.mf.scannet.dk (Postfix) with ESMTPS id AAF821800603
+	for <user@example-a.dk>; Wed, 16 Sep 2026 12:32:29 +0200 (CEST)
+Received: from www-data by node1.spamfilter.io with local (Exim 4.94.2)
+	(envelope-from <info@promo.example>)
+	id 1vU0T8-007ntZ-RU
+	for user@example-a.dk; Wed, 16 Sep 2026 12:32:28 +0200
+Received: from [203.0.113.77] (helo=promo.example)
+	by node2.spamfilter.io with esmtps  (TLS1.3) tls TLS_AES_256_GCM_SHA384
+	(Exim 4.94.2)
+	(envelope-from <info@promo.example>)
+	id 1vL1Gq-00ATwU-Ul
+	for user@example-a.dk; Wed, 16 Sep 2026 12:30:01 +0200
+Received: from localhost (unknown [198.51.100.66])
+	by promo.example (Postfix) with ESMTPSA id 568DD3813AE
+	for <user@example-a.dk>; Wed, 16 Sep 2026 12:30:00 +0200 (CEST)
+From: Promo <info@promo.example>
+To: user@example-a.dk
+Subject: Fixture: SpamExperts spam class, quarantine-released hop
+Date: Wed, 16 Sep 2026 10:30:00 +0000
+Message-ID: <fixture-spamexperts-spam@example.invalid>
+Received-SPF: none (node2.spamfilter.io: domain of promo.example does not designate permitted sender hosts) client-ip=203.0.113.77; envelope-from=info@promo.example; helo=promo.example;
+Authentication-Results: node2.spamfilter.io;
+	iprev=pass (mx.promo.example) smtp.remote-ip=203.0.113.77;
+	spf=none smtp.mailfrom=promo.example
+X-Spamfilter.io-Class: spam
+X-Spamfilter.io-Evidence: Combined (0.97)
+X-Recommended-Action: reject
+X-Filter-ID: 9kzQTOBWQUFZTohSKvQbgLC7QwLHmvMhIz/t+ESMGTXBejk5IwO6ZPKaqvpFIXTURE
+
+Spam body.
