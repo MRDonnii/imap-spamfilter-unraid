@@ -7,7 +7,7 @@
 # carries the suffix -filter so it can never be mistaken for the AIO image.
 #
 # Build (from the source dir on Unraid, tag from deploy/versions.env):
-#   docker build -t imap-spamfilter-unraid:2.14.1-filter -f filter/Dockerfile.unraid filter
+#   docker build -t imap-spamfilter-unraid:2.14.2-filter -f filter/Dockerfile.unraid filter
 # (deploy/recreate-filter.sh --build does exactly this.)
 #
 # The base is the pinned upstream image (Python 3.14 + Flask/waitress/
@@ -97,6 +97,6 @@ ENTRYPOINT ["python", "-u", "filter.py"]
 
 LABEL org.opencontainers.image.title="imap-spamfilter-unraid" \
       org.opencontainers.image.description="spamfilter 2.0 (pinned upstream base, local engine and WebUI)" \
-      org.opencontainers.image.version="2.14.1-unraid" \
+      org.opencontainers.image.version="2.14.2-unraid" \
       org.opencontainers.image.vendor="imap-spamfilter-unraid" \
       org.opencontainers.image.source="local:<app dir>/source"

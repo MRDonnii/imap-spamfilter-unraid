@@ -1,5 +1,9 @@
 # Ændringslog
 
+## 2.14.2
+
+- **Vedligeholdelse:** Test af opdatering efter flytning af repo. Ingen ændring i, hvordan filteret virker.
+
 ## 2.14.1
 
 - **Opdateringssiden:** Et gammelt resultat (fx "Fejlet v2.11.1") vises ikke længere, når en samme eller nyere version allerede kører – fx efter en manuel installation.

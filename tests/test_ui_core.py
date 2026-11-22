@@ -41,7 +41,7 @@ def admin(client):
 def test_healthz_needs_no_auth(client):
     r = client.get("/healthz")
     assert r.status_code == 200
-    assert r.get_json() == {"ok": True, "version": "2.14.1"}
+    assert r.get_json() == {"ok": True, "version": "2.14.2"}
 
 
 def test_api_health_only_states(env, client):
@@ -85,7 +85,7 @@ def test_security_headers_and_cookie(client):
 def test_static_assets_cache_busted(admin):
     html = admin.get("/").get_data(as_text=True)
     m = re.search(r'href="(/static/app\.css\?v=[^"]+)"', html)
-    assert m and "2.14.1-" in m.group(1)
+    assert m and "2.14.2-" in m.group(1)
     assert re.search(r'<script src="/static/app\.js\?v=[^"]+"></script>', html)
     r = admin.get(m.group(1))
     assert r.status_code == 200

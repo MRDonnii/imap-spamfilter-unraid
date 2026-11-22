@@ -60,7 +60,7 @@ if __name__ == "__main__":
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.14.1"
+VERSION = "2.14.2"
 SCORE_VERSION = 2  # A4: scores computed with the 2.0 sender context
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "/app/accounts.yml"))
