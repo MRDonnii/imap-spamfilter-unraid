@@ -1163,7 +1163,10 @@ def apply_ready(eng: Any, db: Any, log_: logging.Logger, acc: Any, fmap: dict[st
             else:
                 pts = float(r["points"] or 0.0)
                 new = round(float(_get(msg, "our_score") or r["score_before"] or 0.0) + pts, 3)
-                thr = float(r["threshold"] or acc.threshold)
+                # A late result must respect a newly raised account threshold.
+                # Keep the original effective floor too; do not silently make
+                # an old AI job more aggressive after a threshold decrease.
+                thr = max(float(r["threshold"] or acc.threshold), float(acc.threshold))
                 try:
                     syms = [s for s in json.loads(_get(msg, "symbols") or "[]") if isinstance(s, dict)]
                 except (TypeError, ValueError):

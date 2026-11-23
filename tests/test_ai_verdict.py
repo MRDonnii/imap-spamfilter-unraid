@@ -801,3 +801,57 @@ def test_legacy_ai_metadata_is_unknown_and_migration_is_idempotent():
         assert all(row[name] is None for name in ai.META_COLUMNS)
     finally:
         conn.close()
+
+
+def test_raised_account_threshold_before_ai_apply_is_respected(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode='on')
+    h.deliver('raised-before-ai@example.test', score=6.0)
+    h.scan()
+    drain(h)
+    h.acc.threshold = 12.0
+    assert apply(h) == 1
+    row = h.row('raised-before-ai@example.test')
+    assert row['our_score'] == 9.0
+    assert row['our_action'] == 'none'
+    assert not pending(h)
+
+
+def test_raised_account_threshold_after_ai_apply_cancels_pending_move(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode='on')
+    h.deliver('raised-after-ai@example.test', score=6.0)
+    h.scan()
+    drain(h)
+    apply(h)
+    assert pending(h)
+    h.acc.threshold = 12.0
+    h.advance(61)
+    h.moves()
+    assert not pending(h)
+    assert h.row('raised-after-ai@example.test')['our_action'] == 'none'
+    assert not h.client.folders[h.acc.folder_map['junk']].msgs
+
+
+def test_old_ai_job_does_not_lower_its_original_threshold(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode='on')
+    h.deliver('lowered-after-scan@example.test', score=4.0)
+    h.scan()
+    drain(h)
+    h.acc.threshold = 6.0
+    assert apply(h) == 1
+    assert h.row('lowered-after-scan@example.test')['our_score'] == 7.0
+    assert h.row('lowered-after-scan@example.test')['our_action'] == 'none'
+    assert not pending(h)
+
+
+def test_raised_threshold_preserves_explicit_user_spam_move(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode='on')
+    h.deliver('user-spam-after-ai@example.test', score=6.0)
+    h.scan()
+    drain(h)
+    apply(h)
+    assert pending(h)
+    h.acc.threshold = 12.0
+    h.db.update_message('user-spam-after-ai@example.test', user_verdict='spam')
+    h.advance(61)
+    h.moves()
+    assert h.row('user-spam-after-ai@example.test')['our_action'] == 'moved_to_junk'

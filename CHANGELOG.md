@@ -2,6 +2,10 @@
 
 ## Under udvikling efter 2.15.0-beta
 
+- Forsinkede AI-svar respekterer en hævet postkassegrænse. En ren AI-
+  scoreflytning aflyses også, hvis grænsen hæves i ventetiden. Oprindelige
+  højere grænser bevares; manuelle spamafgørelser og trusler ændres ikke.
+
 - Ny separat AIO-gendannelsesprøve fra krypteret backup. Kontrollerer app,
   Rspamd, Redis og Unbound på en kontoløs kopi uden netværk/porte og med
   containerbudgetter. Verificerer mounts/isolation før start og faktisk RDB-
