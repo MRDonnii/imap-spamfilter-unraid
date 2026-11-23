@@ -687,3 +687,21 @@ def test_account_spam_automation_has_scoped_admin_switch_and_preserves_other_set
     assert any(a['action'] == 'account_auto_block' for a in audit(env))
     assert post(admin, '/accounts/bynet/auto-block', {'auto_block_repeated_spam':'1'}).status_code == 200
     assert env.entry('bynet')['auto_block_repeated_spam'] is True
+
+
+def test_manual_correction_followup_is_admin_only_and_selected_account_scoped(env, monkeypatch):
+    import correctionfollowup
+    import decisiontrace
+    from fakes_ui import insert_message
+    env.conn.executescript(decisiontrace.SCHEMA)
+    monkeypatch.setattr(dashboard.engine, 'from_authenticated', lambda *args: False, raising=False)
+    now=int(time.time())
+    for account in ('bynet','molt'):
+        insert_message(env.conn,account,'followup-'+account,user_verdict='spam',verdict_at=now,verdict_by='admin')
+    env.conn.commit()
+    admin=client_for(env,'admin')
+    text=body(admin.get('/spam?account=bynet'))
+    assert 'Tjek disse: manuelle spamrettelser' in text
+    assert '1 seneste eksplicitte spamrettelser' in text
+    assert 'Tjek disse: manuelle spamrettelser' not in body(client_for(env,'anna').get('/spam'))
+    assert 'Tjek disse: manuelle spamrettelser' not in body(admin.get('/spam?account=sofie'))

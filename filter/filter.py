@@ -66,7 +66,7 @@ if __name__ == "__main__":
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.18.0"
+VERSION = "2.19.0"
 SCORE_VERSION = 2  # A4: scores computed with the 2.0 sender context
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "/app/accounts.yml"))
@@ -1423,6 +1423,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_last_seen ON messages(account, last_seen
 CREATE INDEX IF NOT EXISTS idx_messages_action ON messages(account, our_action);
 CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(account, current_folder);
 CREATE INDEX IF NOT EXISTS idx_messages_scanned ON messages(account, scanned_at);
+CREATE INDEX IF NOT EXISTS idx_messages_verdict ON messages(account, user_verdict, verdict_at);
 CREATE INDEX IF NOT EXISTS idx_stats_daily_day ON stats_daily(day, metric);
 CREATE INDEX IF NOT EXISTS idx_train_jobs_status ON train_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_daily_receipts_day ON daily_receipts(account, day, kind);

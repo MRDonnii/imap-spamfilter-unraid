@@ -184,9 +184,9 @@ Scriptenes indhold kopieres direkte ind i User Scripts, så de kører ikke fra a
 | Kun rspamds linjer | `docker logs --since 1h spamfilter 2>&1 \| grep '^\[rspamd\]'` |
 | Lytter kun WebUI'en udadtil? | `docker exec spamfilter sf-health listeners` |
 
-## 2.18.0 beta: installation og kontrol
+## 2.19.0 beta: installation og kontrol
 
-Denne udgivelse leveres som signeret kildepakke til den eksisterende WebUI-opdatering. Vælg **System → Opdateringer → Beta**, kontroller version 2.18.0 og brug **Opdatér nu**, når du vil installere. Værtshjælperen verificerer pakken og bygger containeren lokalt som beskrevet ovenfor. Der publiceres ikke et nyt GHCR-image i denne kildebaserede udgivelse; CI bygger og prøver begge images, og all-in-one-prøven bruger en tom testinstallation.
+Denne udgivelse leveres som signeret kildepakke til den eksisterende WebUI-opdatering. Vælg **System → Opdateringer → Beta**, kontroller version 2.19.0 og brug **Opdatér nu**, når du vil installere. Værtshjælperen verificerer pakken og bygger containeren lokalt som beskrevet ovenfor. Der publiceres ikke et nyt GHCR-image i denne kildebaserede udgivelse; CI bygger og prøver begge images, og all-in-one-prøven bruger en tom testinstallation.
 
 Tag en aktuel backup før installation. Efter opdateringen: kontroller versionsnummer, `sfctl doctor`, kontoernes forbindelser og **Drift → Scanningens dækning**. Dækningstabellen kræver nye hændelser; gamle brugerrettelser uden en ny første-scanningsobservation kan ikke indgå i den nye evaluering. En ældre frigivelse uden indholdsfingerprint kan kræve genfrigivelse, hvis mailen leveres til indbakken på ny.
 

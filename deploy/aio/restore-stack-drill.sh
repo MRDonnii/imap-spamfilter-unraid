@@ -7,12 +7,14 @@
 set -euo pipefail
 umask 077
 archive='' keyfile='' image='' memory=2048
+check_args=()
 while (( $# )); do
   case "$1" in
     --archive) archive="${2:?}"; shift ;;
     --key-file) keyfile="${2:?}"; shift ;;
     --image) image="${2:?}"; shift ;;
     --memory-mib) memory="${2:?}"; shift ;;
+    --require-fuzzy) check_args+=(--require-fuzzy) ;;
     -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
     *) echo 'Unknown argument' >&2; exit 2 ;;
   esac
@@ -136,4 +138,4 @@ done
 docker exec --user 11333:11333 "$runtime" cat /run/spamfilter/rspamd/local.d/antivirus.conf | \
   grep -Eq 'enabled[[:space:]]*=[[:space:]]*false' || die 'Antivirus was not disabled'
 timeout 60 docker exec --user 10099:10099 --workdir /app "$runtime" \
-  /usr/local/bin/python3 /app/stackrestore.py check
+  /usr/local/bin/python3 /app/stackrestore.py check "${check_args[@]}"

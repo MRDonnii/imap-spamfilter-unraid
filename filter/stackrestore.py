@@ -177,7 +177,7 @@ def prepare(archive, key, output, *, bundle, renderer=None, seed=seed_canary, me
         raise
 
 
-def check_runtime(app=Path('/appdata')):
+def check_runtime(app=Path('/appdata'), *, require_fuzzy=False):
     import requests
     proof = json.loads((app / 'operations' / 'restore-proof.json').read_text())
     if (app / 'config' / 'accounts.yml').read_text().strip() != 'accounts: []':
@@ -206,8 +206,19 @@ def check_runtime(app=Path('/appdata')):
     if redis('GET', proof['canary']['key']) != proof['canary']['value']:
         raise PrepareError('Redis indlæste ikke den gendannede RDB-kopi.')
     redis('DEL', proof['canary']['key'])
+    fuzzy_verified = None
+    marker = app / 'state/restore-fuzzy-canary.json'
+    if require_fuzzy and not marker.is_file():
+        raise PrepareError('Backup mangler den krævede fuzzy-prøvemarkør.')
+    if marker.is_file():
+        if json.loads(marker.read_text()) != {'schema_version': 1}:
+            raise PrepareError('Ukendt fuzzy-prøvemarkør.')
+        import fuzzyrestoreproof
+        # Read-only check: NEVER learn the canary after restoration.
+        fuzzy_verified = fuzzyrestoreproof.check()
+
     return dict(ok=True, http=True, rspamd_scan=True, redis_canary_verified=True,
-                redis_keys=int(redis('DBSIZE')), accounts_enabled=0,
+                fuzzy_canary_verified=fuzzy_verified, redis_keys=int(redis('DBSIZE')), accounts_enabled=0,
                 app_version=health.json().get('version'), clamav='not_started_offline',
                 scope=proof['scope'], runtime_config=proof['runtime_config'])
 
@@ -221,11 +232,12 @@ def main():
     p.add_argument('--to', required=True)
     p.add_argument('--bundle', default='/usr/local/share/spamfilter-aio')
     p.add_argument('--memory-mib', type=int, default=1024)
-    commands.add_parser('check')
+    check = commands.add_parser('check')
+    check.add_argument('--require-fuzzy', action='store_true')
     args = parser.parse_args()
     try:
         if args.command == 'check':
-            result = check_runtime()
+            result = check_runtime(require_fuzzy=args.require_fuzzy)
         else:
             keyfile = Path(args.key_file)
             if keyfile.is_symlink():

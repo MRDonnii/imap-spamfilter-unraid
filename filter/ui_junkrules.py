@@ -18,6 +18,9 @@ moves or deletes mail: a rule only acts on mail that arrives later.
 from __future__ import annotations
 
 import logging
+import time
+
+import correctionfollowup
 from typing import Any
 
 from flask import request
@@ -105,8 +108,9 @@ def section(selected: str = "", here: str = "/spam") -> str:
     except Exception as ex:  # noqa: BLE001 - a hint must never break the page
         log.warning("junk notes failed: %s", type(ex).__name__)
         return ""
+    followup = followup_section(selected)
     if not items:
-        return ""
+        return followup
     n_open = sum(1 for n in items if n.get("status") == "open")
     rows = "".join(_row(n, here) for n in items[:MAX_SHOWN])
     return ('<section class="card review-card" id="regler-at-tjekke" aria-labelledby="rt-title">'
@@ -115,7 +119,7 @@ def section(selected: str = "", here: str = "/spam") -> str:
             f'<span class="badge tone-info">{kit.fmt_int(n_open)}</span></h2>'
             '<p class="card-sub">Afsendere, som brugerne selv flytter til Junk. Kun for administratorer; '
             "hver handling gælder én postkasse og flytter ingen mails.</p></div></div>"
-            f'<ul class="review-list">{rows}</ul></section>')
+            f'<ul class="review-list">{rows}</ul></section>') + followup
 
 
 def _rule(rule_id: Any) -> Any:
@@ -187,3 +191,29 @@ def junk_notes_action():
     ui.audit("junk_note_block", account, detail=f"block {pattern}")
     return ui.respond(f"{pattern} er blokeret for {ui.account_label(account)}. Mails, der allerede ligger i "
                       "postkassen, er ikke flyttet.", next_url=back, reload=True)
+
+
+def followup_section(selected=""):
+    """Admin-only aggregate; no sender, subject or message ID is rendered."""
+    if not ui.is_admin():
+        return ""
+    import ui_mail
+    names = list(ui_mail._accounts())
+    if selected:
+        names = [selected] if selected in names else []
+    try:
+        now = int(time.time())
+        groups = correctionfollowup.summarize(ui.db(), names, now-30*86400, now+1,
+                                              authenticated=ui.engine.from_authenticated)
+    except Exception as ex:
+        log.warning("correction follow-up failed: %s", type(ex).__name__)
+        return ""
+    groups = [g for g in groups if g['sample_size']]
+    if not groups:
+        return ""
+    parts = []
+    for g in groups:
+        parts.append('<h3>' + h(ui.account_label(g['account'])) + '</h3><ul>' +
+                     ''.join('<li>' + h(line) + '</li>' for line in correctionfollowup.lines(g)) + '</ul>')
+    return kit.card(''.join(parts), title="Tjek disse: manuelle spamrettelser",
+                    subtitle="Seneste 30 dage · højst 500 rettelser pr. postkasse")

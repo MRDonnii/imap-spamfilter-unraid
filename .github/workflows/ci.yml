@@ -34,6 +34,8 @@ jobs:
                    deploy/aio/sf-fatal-listener deploy/aio/sfctl-aio deploy/aio/sf-health deploy/aio/sf-clamav; do
             bash -n "$f"
           done
+          bash -n tests/make_stack_restore_fixture.sh
+          shellcheck -x tests/make_stack_restore_fixture.sh
           shellcheck -x deploy/*.sh deploy/aio/*.sh deploy/aio/sf-run deploy/aio/sf-entrypoint \
             deploy/aio/sf-fatal-listener deploy/aio/sfctl-aio deploy/aio/sf-health deploy/aio/sf-clamav
       - name: Test suite
@@ -109,14 +111,11 @@ jobs:
       - name: Encrypted full stack restore (no network or ports)
         run: |
           fixture="$RUNNER_TEMP/restore-fixture"
-          mkdir -m 700 "$fixture"
-          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
-            --user "$(id -u):$(id -g)" --memory 2g --cpus 1 --pids-limit 64 --workdir /app \
-            -v "$fixture:/fixture" -v "$PWD/tests/make_stack_restore_fixture.py:/fixture-maker.py:ro" \
-            --entrypoint /usr/local/bin/python3 imap-spamfilter-unraid:ci /fixture-maker.py
+          sudo env SPAMFILTER_APP="$RUNNER_TEMP/fixture-isolated" \
+            bash tests/make_stack_restore_fixture.sh "$fixture" imap-spamfilter-unraid:ci
           sudo env SPAMFILTER_APP="$RUNNER_TEMP/restore-drill" \
-            deploy/aio/restore-stack-drill.sh --archive "$fixture/fixture.sfbak" \
-              --key-file "$fixture/fixture.key" --image imap-spamfilter-unraid:ci
+            deploy/aio/restore-stack-drill.sh --archive "$fixture/output/fixture.sfbak" \
+              --key-file "$fixture/output/fixture.key" --image imap-spamfilter-unraid:ci --require-fuzzy
       # 2.12 (#7): the frozen image - every Python distribution in it, checked
       # with pip-audit (exact versions, no resolution), and Trivy on the whole
       # image (OS packages + language packages): HIGH/CRITICAL with a fix fail

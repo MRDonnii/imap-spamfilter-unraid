@@ -229,3 +229,34 @@ ikke af prøven. Oprydning fjerner kun containere med ID'er oprettet af denne
 kørsel og dens egen mappe. Hvis Docker ikke kan fjerne en prøvecontainer,
 bevares kopien, og scriptet returnerer fejl. Der installeres eller aktiveres
 intet i produktion.
+
+
+## Lokale fuzzy-mønstre og gendannelsesbevis (2.19)
+
+Den medfølgende `worker-fuzzy.inc` vælger `backend = "redis"` og arver
+forbindelsen fra `redis.conf`. Lokale fuzzy-mønstre er derfor allerede med i
+`redis/dump.rdb`; der kopieres ingen aktiv SQLite-database fra rspamd/data.
+Backupens AES-GCM-beskyttede `learning_stores` beskriver de gemte konfigurationers
+profil. `backup-verify` returnerer den også; gamle arkiver har intet sådant
+bevis. Det er ikke en kontrol af alle aktive overrides eller eksterne backends.
+En afvigende eksplicit fuzzy-backend eller egne worker-servere markeres som
+ufuldstændig, og seneste vellykkede backup/retention bevares. Manglende læsbar
+worker-konfiguration giver en advarsel og ukendt fuzzy-dækning.
+
+Redis tager et konsistent øjebliksbillede med `redis-cli --rdb`. Fuzzy-workerens
+endnu ikke skrevne opdateringskø er ikke i dette snapshot; standardens interval
+kan give op til cirka ét minuts forsinkelse. Backupen stopper ikke læring og
+lover ikke ét atomisk tidspunkt på tværs af appens SQLite og Redis.
+Brugerdefinerede SQLite-/eksterne fuzzy-lagre, andre Rspamd-lagre og ClamAV-
+signaturer er ikke dokumenteret gendannet af denne prøve.
+
+CI opretter nu en frisk AIO uden konti, netværk eller publicerede porte og
+med kun lokal fuzzy-regel. Den indlærer og kontrollerer en neutral tekst,
+lader fuzzy-køen skrive (prøvens sync=1s), tager en rigtig Redis-replikationskopi
+og krypterer den med den almindelige backupkode. En anden AIO starter fra den
+dekrypterede kopi og skal genkende `FUZZY_LOCAL_SPAM` uden at indlære igen.
+Markøren `state/restore-fuzzy-canary.json` findes kun i CI-prøven; almindelige
+backups indeholder ingen syntetisk træning. Den almindelige månedlige
+`backup-drill` får ikke automatisk denne ekstra fuzzy-prøve.
+
+Baggrund: [Rspamds dokumentation om lokal fuzzy-lagring](https://docs.rspamd.com/tutorials/fuzzy_storage/).

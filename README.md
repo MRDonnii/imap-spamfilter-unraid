@@ -1,4 +1,4 @@
-# Spamfilter til Unraid (version 2.18.0)
+# Spamfilter til Unraid (version 2.19.0)
 
 Et selvhostet spamfilter til familiens og firmaets postkasser. Fra 2.4 kører det i **én Docker-container**, `spamfilter`, på en Unraid-server. Postkasserne bliver hos deres udbydere (fx Gigahost eller Scannet, som filteret kender særligt godt). Filteret logger ind via krypteret IMAP, vurderer nye ulæste mails inden for størrelsesgrænsen i indbakken og flytter spam over i mappen **Spamfilter** i samme postkasse.
 
@@ -102,3 +102,20 @@ i undervisning og i foreninger. Kommerciel brug kræver skriftlig tilladelse fra
 
 Projektet bygger på [marcelverdult/imap-spamfilter](https://github.com/marcelverdult/imap-spamfilter), og de dele,
 der stammer derfra, er fortsat under MIT-licensen. Se [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+
+### Opfølgning på manuelle spamrettelser (2.19)
+
+Administratorens **Tjek disse** viser automatisk seneste 30 dages eksplicitte
+spamafgørelser, højst 500 pr. postkasse. Ugerapporten bruger samme analyse for
+sin uge; den korte rapport viser kun sin egen postkasse. Det oprindelige
+scanningsspor viser blandt andet tilladelsesregler og scorer under grænsen.
+En senere ham-afgørelse fjerner mailen fra opgørelsen. Gentagne klik tælles
+ikke som forskellige mails. Gamle/slettede spor kan ikke genskabes.
+
+Analysen bruger gemte metadata, ingen mailtekst eller ekstern AI. Senere AI-
+og kampagneafgørelser kan have fanget mailen; første scanning er ikke den
+endelige leveringsafgørelse. Manglende afsenderbevis og mindst tre adresser på
+samme domæne er observationer, ikke bevis på en fælles spamkampagne. Opgørelsen
+er et udvalgt korrektionsgrundlag, ingen samlet træfsikkerhedsprocent.
+Den ændrer ikke regler, grænser eller andre familiemedlemmers præferencer.

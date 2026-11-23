@@ -4055,6 +4055,13 @@ def weekly_data(week: str | None = None, *, account: str | None = None,
     try:
         with closing(_open_db_ro(eng)) as conn:
             ext_url = _settings_kv(conn, "external_url")
+            try:
+                import correctionfollowup
+                out["correction_followup"] = correctionfollowup.summarize(
+                    conn, names, since, until, authenticated=getattr(eng, 'from_authenticated', None))
+            except sqlite3.Error:
+                out["correction_followup"] = []
+
             q = ",".join("?" * len(WEEKLY_METRICS))
             for label, dset in (("cur", days), ("prev", prev_days)):
                 for r in conn.execute(
@@ -4213,6 +4220,16 @@ def render_weekly(data: dict[str, Any], *, full: bool = True, preview: bool = Fa
     lines: list[str] = ["Hej", "", f"Ugerapport for uge {week_no} ({data.get('span', '')}).", ""]
     blocks: list[str] = [f"<p>Hej</p><p><strong>Ugerapport for uge {_html.escape(week_no)}</strong> "
                          f"({_html.escape(str(data.get('span', '')))}).</p>"]
+    import correctionfollowup
+    for item in data.get('correction_followup') or []:
+        if not item['sample_size']:
+            continue
+        name = next((a['name'] for a in data.get('accounts', []) if a['account'] == item['account']), item['account'])
+        title = 'Opfølgning på spamrettelser: ' + str(name)
+        detail = correctionfollowup.lines(item)
+        lines += [title, *detail, '']
+        blocks.append('<p><strong>' + _html.escape(title) + '</strong></p><ul>' +
+                      ''.join('<li>' + _html.escape(line) + '</li>' for line in detail) + '</ul>')
     shop = data.get("webshop") or {}
     if shop.get("line"):
         lines += [shop["line"]]

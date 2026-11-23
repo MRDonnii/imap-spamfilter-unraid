@@ -532,3 +532,30 @@ def test_isolated_backup_keeps_the_engine_locks(bk):
 
 def test_the_nightly_job_uses_the_child_process():
     assert backup.run_nightly is backup.run_backup_isolated
+
+
+def test_local_fuzzy_redis_inventory_is_authenticated_and_custom_backend_not_full(bk, tmp_path):
+    worker = bk.app / 'rspamd/local.d/worker-fuzzy.inc'
+    worker.write_text('backend = "redis";\n')
+    result = backup.run_backup(now=1700000000)
+    assert result['ok']
+    archive = _only(bk.dest)
+    verified = backup.verify(archive)
+    assert verified['learning_stores']['local_fuzzy']['snapshot'] == 'redis/dump.rdb'
+    assert verified['learning_stores']['local_fuzzy']['backend'] == 'redis'
+    restored = tmp_path / 'restored-fuzzy'
+    backup.restore(archive, restored)
+    assert (restored / 'redis/dump.rdb').read_bytes() == RDB
+    assert (restored / 'appdata/rspamd/local.d/worker-fuzzy.inc').read_bytes() == worker.read_bytes()
+    worker.write_text('backend = "sqlite";\n')
+    result = backup.run_backup(now=1700003600)
+    assert not result['ok'] and result['archive']
+    assert result['last_ok_ts'] == 1700000000
+    assert any('fuzzy' in warning for warning in result['warnings'])
+
+
+def test_old_archive_inventory_remains_unknown(bk):
+    result = backup.run_backup()
+    assert result['learning_stores']['local_fuzzy']['backend'] == 'unknown'
+    assert result['learning_stores']['local_fuzzy']['snapshot'] is None
+    assert any('fuzzy' in w for w in result['warnings'])

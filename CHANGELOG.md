@@ -1,5 +1,22 @@
 # Ændringslog
 
+## 2.19.0 — 2026-11-23 (beta)
+
+- Automatisk metadataopfølgning på seneste eksplicitte spamrettelser i
+  eksisterende Tjek disse og ugerapporten. Første scanningsspor forklarer
+  daværende tilladelse, tidligere frigivelse eller lav score; allerede
+  opdaget spam og manglende spor vises særskilt. Seneste brugerafgørelse
+  gælder, én mail tælles én gang, højst 500 pr. konto og periode.
+  Gemte afsenderbeviser og flere adresser på samme domæne giver forsigtige
+  forklaringer. Ingen automatisk domæneblokering eller ændrede grænser.
+- Krypteret backup angiver nu sit læringsgrundlag i den beskyttede manifest:
+  standardprofilens lokale fuzzy-mønstre ligger i samme Redis-RDB som Bayes.
+  Ukendt profil vises som ukendt; en kendt afvigende fuzzy-backend giver
+  ufuldstændig backupstatus og bevarer seneste vellykkede backup/retention.
+- CI indlærer et neutralt lokalt fuzzy-mønster i en frisk, kontoløs AIO med
+  netværket afbrudt. Krypteret backup gendannes i en anden isoleret AIO;
+  mønstret skal genkendes uden genindlæring. Egne maildata anvendes ikke.
+
 ## 2.18.0 — 2026-11-23 (beta)
 
 - Ejerbestilt personlig spamautomatik: Tre nye rettelser af forskellige mails
