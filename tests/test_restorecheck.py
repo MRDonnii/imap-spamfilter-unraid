@@ -1,10 +1,12 @@
 """Actual isolated Redis + HTTP startup on an encrypted restored fixture."""
 import os
+import json
 from pathlib import Path
 import shutil
 import sqlite3
 import subprocess
 import time
+import sys
 import pytest
 from test_backup import bk, _only
 import backup
@@ -60,6 +62,7 @@ def test_actual_restore_starts_app_and_loads_bayes(bk, tmp_path, monkeypatch):
     original = (bk.state / 'spamfilter.db').read_bytes()
     result = restorecheck.run(_only(bk.dest))
     assert result['ok'] and result['app_started'] and result['redis_keys'] == 1
+    assert result['child_limits']['memory_mib_max'] == 1024
     assert (bk.state / 'spamfilter.db').read_bytes() == original
     with pytest.raises(backup.BackupError):
         restorecheck.run(_only(bk.dest), key=b'x' * 32)
@@ -69,3 +72,39 @@ def test_actual_restore_starts_app_and_loads_bayes(bk, tmp_path, monkeypatch):
     newest = max(bk.dest.glob('*.sfbak'), key=lambda p: p.name)
     with pytest.raises(restorecheck.DrillError, match='Redis'):
         restorecheck.run(newest)
+
+
+def test_actual_child_has_kernel_resource_limits_and_cannot_allocate_over_budget():
+    code = '''import json,resource,sys
+print(json.dumps({str(k): resource.getrlimit(k) for k in
+ (resource.RLIMIT_AS, resource.RLIMIT_CPU, resource.RLIMIT_NOFILE, resource.RLIMIT_CORE)}), flush=True)
+try:
+    data = bytearray(256 * 1024 * 1024)
+except MemoryError:
+    print('allocation blocked', flush=True)
+    sys.exit(0)
+sys.exit(2)
+'''
+    proc = restorecheck._start_bounded([sys.executable, '-c', code], memory_mib=128,
+                                      stdout=subprocess.PIPE)
+    try:
+        output, _ = proc.communicate(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+    assert proc.returncode == 0
+    rows = output.decode().splitlines()
+    limits = json.loads(rows[0])
+    import resource
+    assert limits[str(resource.RLIMIT_AS)][0] <= 128 * 1024 * 1024
+    assert limits[str(resource.RLIMIT_CPU)][0] <= 30
+    assert limits[str(resource.RLIMIT_NOFILE)][0] <= 128
+    assert limits[str(resource.RLIMIT_CORE)] == [0, 0]
+    assert rows[1] == 'allocation blocked'
+
+
+@pytest.mark.parametrize('limit', [0, 127, 4097, True])
+def test_invalid_budget_is_refused_before_restoring_anything(tmp_path, limit):
+    with pytest.raises(restorecheck.DrillError, match='Hukommelsesgrænsen'):
+        restorecheck.run(tmp_path / 'not-opened.sfbak', memory_mib=limit)

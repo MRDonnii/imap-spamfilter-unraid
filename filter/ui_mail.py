@@ -101,6 +101,7 @@ EVENT_INFO: dict[str, tuple[str, str, str]] = {
     "learn_spam": ("Lært som spam", "graduation-cap", "brand"),
     "learn_ham": ("Lært som legitim", "graduation-cap", "ok"),
     "learn_skipped": ("Læring sprunget over", "info", "neutral"),
+    "learn_held_out": ("Ikke trænet – reserveret til evaluering", "info", "neutral"),
     "learn_failed": ("Læring fejlede", "alert-circle", "warn"),
     "learn_error": ("Læring fejlede", "alert-circle", "warn"),
     "learn_giveup": ("Læring opgivet", "alert-circle", "warn"),
@@ -736,8 +737,10 @@ def why_reasons(r: Any, rule: Any = None) -> list[str]:
     """Plain Danish reasons (no numbers) for the calm 'Hvorfor?' of a Bruger."""
     out: list[str] = []
     action = _rget(r, "our_action")
-    if rule is not None and rule["kind"] == "block":
-        out.append("Afsenderen er blokeret")
+    if _rget(r, "user_verdict") == "ham" or action in RELEASED_ACTIONS:
+        out.append("Mailen er markeret som rigtig post")
+    if str(_rget(r, "rule_hit") or "").startswith("block:"):
+        out.append("Afsenderen var blokeret, da mailen blev vurderet")
     if action in PROVIDER_ACTIONS:
         out.append("Din udbyders eget spamfilter lagde den i spam")
     if action in MISSED_ACTIONS:
@@ -750,7 +753,12 @@ def why_reasons(r: Any, rule: Any = None) -> list[str]:
         if text and text not in out:
             out.append(text)
     if not out:
-        out.append("Den samlede vurdering af mailen lå over grænsen for spam")
+        if action in ("none", "allowlisted", "newsletter_kept"):
+            out.append("Filteret har ikke markeret mailen som spam")
+        elif action in NEWSLETTER_ACTIONS:
+            out.append("Mailen er vurderet som et nyhedsbrev")
+        else:
+            out.append("Der er ikke gemt en nærmere forklaring på vurderingen")
     return out[:4]
 
 

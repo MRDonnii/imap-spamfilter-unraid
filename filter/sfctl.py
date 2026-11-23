@@ -1870,7 +1870,7 @@ def cmd_backup_drill(args):
     bk = _backup_mod()
     path, key = _archive_path(bk, args.file), _ask_key(args, bk)
     try:
-        result = restorecheck.run(path, key)
+        result = restorecheck.run(path, key, memory_mib=args.memory_mib)
     except (restorecheck.DrillError, bk.BackupError) as ex:
         audit("backup_startup_drill", result="failed", detail=type(ex).__name__)
         raise CliError(str(ex)) from None
@@ -2451,6 +2451,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("backup-drill", "gendan midlertidigt og start app + Bayes isoleret uden mailarbejdere", cmd_backup_drill)
     p.add_argument("file", metavar="FIL")
     p.add_argument("--ask-key", action="store_true")
+    p.add_argument("--memory-mib", type=int, default=1024,
+                   help="højst MiB virtuel hukommelse pr. prøveproces, 128–4096 (standard 1024)")
     p = add("backup-verify", "dekrypter en backup og tjek alle kontrolsummer (skriver intet)", cmd_backup_verify)
     p.add_argument("file", metavar="FIL", help="filnavnet fra sfctl backup-list (eller en sti)")
     p.add_argument("--ask-key", action="store_true", help="spørg efter nøglen (fra kode-manageren)")

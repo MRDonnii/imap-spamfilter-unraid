@@ -161,3 +161,29 @@ docker exec spamfilter sfctl backup-drill /backup/spamfilter-YYYYMMDDTHHMMSSZ.sf
 Brug arkivets faktiske navn; `--ask-key` spørger interaktivt efter en anden backupnøgle. Nøglen må ikke indgå i kommandolinjen. Prøven kræver både `spamfilter.db` og Redis/Bayes-dumpen. Den oprindelige installation og arkivet ændres ikke. Midlertidige processer stoppes og filerne slettes efter prøven. Der bruges ingen aktive konti eller mail-, SMTP-, trænings- eller push-arbejdere; Redis og HTTP lytter kun på private Unix-sockets. App-processen afviser udgående IP-forbindelser.
 
 Dette bekræfter, at SQLite, applikationen og Redis-data kan indlæses. Det er ikke en fuld gendannelse af udbyderadgang, Rspamd/Bayes-scoring eller ClamAV-signaturer. Containerens særskilte `smoke-test.sh --learn-test` kontrollerer også rigtig Rspamd-scanning, læring og data efter genstart og udfører herefter denne backup/opstart-prøve på den tomme testinstallation. Mailudbydere og live-installation skal fortsat kontrolleres ved ejerens installation. En tom Bayes-base er tilladt ved manuel prøve; JSON-resultatet viser `redis_keys`.
+
+### Ressourcegrænser i opstartsprøven (under udvikling)
+
+De to prøve-underprocesser (Redis og HTTP-appen) får hver højst 1024 MiB
+**virtuelt adresserum**, 30 CPU-sekunder og 128 åbne filer. Core dumps er slået
+fra. En frisk Python-bootstrap sætter kernelgrænserne og erstatter sig selv
+med den faktiske proces; der bruges ikke `preexec_fn` i den flertrådede app.
+Prøvebørnene bruger `PYTHONMALLOC=malloc`, så store virtuelle allocator-arenaer
+ikke optager budgettet før app-importerne. Den almindelige filterproces ændres ikke.
+
+Et stort Bayes-dump kan kræve et andet budget, fx:
+
+```sh
+docker exec spamfilter sfctl backup-drill BACKUPFIL --memory-mib 2048
+```
+
+Grænsen skal være 128–4096 MiB pr. barn; vælg inden for containerens tilgængelige
+ressourcer. Strengere, allerede arvede kernelgrænser bevares. JSON-resultatets
+`child_limits` viser de anvendte maksimumsbudgetter. Fejlet indlæsning eller et
+overskredet budget giver fejl; en gyldig arkivkontrol alene godkender ikke opstarten.
+Begge børn stoppes ved afslutning eller fejl, og prøvens midlertidige kopi fjernes.
+
+Budgetterne gælder **underprocesserne**. Dekryptering, udpakning og SQLite-
+integritetskontrol kører fortsat i den kaldende proces under containerens
+almindelige grænser. Der oprettes ingen ny container/cgroup. Rspamd, ClamAV,
+eksterne tjenester og login på mailudbyderen er stadig uden for denne prøve.

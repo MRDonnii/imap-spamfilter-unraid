@@ -22,6 +22,7 @@ from test_ui_core import INLINE_PATTERNS
 
 import dashboard
 import ui_kit as kit
+import ui_mail
 
 
 def audit(env) -> list[dict]:
@@ -624,3 +625,21 @@ def test_single_mailbox_undo_page_wording(env):
     assert "1. Vælg periode" in html and "Vælg postkasse og periode" not in html
     assert "følsomheden" not in html
     assert "følsomheden" in body(client_for(env, "admin").get("/undo"))
+
+
+def test_bruger_explanation_does_not_rewrite_history_using_a_new_block_rule():
+    row = dict(our_action='moved_to_junk', rule_hit=None, symbols='[]')
+    reasons = ui_mail.why_reasons(row, dict(id=42, kind='block'))
+    assert not any('blokeret' in r.lower() for r in reasons)
+
+
+def test_bruger_explanation_keeps_a_recorded_block_after_the_rule_is_removed():
+    row = dict(our_action='moved_to_junk', rule_hit='block:42', symbols='[]')
+    reasons = ui_mail.why_reasons(row)
+    assert any('blokeret' in r.lower() for r in reasons)
+
+
+def test_bruger_explanation_never_claims_an_unrecorded_score_threshold():
+    reasons = ui_mail.why_reasons(dict(our_action='none', rule_hit=None, symbols='[]'))
+    assert not any('over grænsen' in r for r in reasons)
+    assert any('ikke markeret' in r for r in reasons)

@@ -21,6 +21,35 @@ class DrillError(ValueError):
     pass
 
 
+MEMORY_MIB = 1024
+CPU_SECONDS = 30
+OPEN_FILES = 128
+# A fresh interpreter applies limits and execs the actual child. Avoid
+# preexec_fn: this drill can be launched by a multithreaded web process.
+LIMIT_BOOTSTRAP = r'''
+import os, resource, sys
+for kind, requested in ((resource.RLIMIT_AS, int(sys.argv[1])),
+                        (resource.RLIMIT_CPU, int(sys.argv[2])),
+                        (resource.RLIMIT_NOFILE, int(sys.argv[3])),
+                        (resource.RLIMIT_CORE, 0)):
+    hard = resource.getrlimit(kind)[1]
+    value = min(requested, hard) if hard != resource.RLIM_INFINITY else requested
+    resource.setrlimit(kind, (value, value))
+os.execvpe(sys.argv[4], sys.argv[4:], os.environ)
+'''
+
+
+def _start_bounded(command, *, memory_mib=MEMORY_MIB, env=None, cwd=None,
+                   stdout=subprocess.DEVNULL):
+    # malloc avoids very large virtual arena reservations by a Python
+    # allocator defeating an address-space budget before imports complete.
+    child_env = dict(os.environ if env is None else env, PYTHONMALLOC='malloc')
+    return subprocess.Popen([sys.executable, '-c', LIMIT_BOOTSTRAP,
+                             str(memory_mib * 1024 * 1024), str(CPU_SECONDS), str(OPEN_FILES), *command],
+                            env=child_env, cwd=cwd, stdin=subprocess.DEVNULL,
+                            stdout=stdout, stderr=subprocess.DEVNULL)
+
+
 def _redis(sockpath, command):
     with socket.socket(socket.AF_UNIX) as sock:
         sock.settimeout(2)
@@ -73,8 +102,10 @@ server.run()
 '''
 
 
-def run(archive, key=None, *, timeout=30):
+def run(archive, key=None, *, timeout=30, memory_mib=MEMORY_MIB):
     import backup
+    if isinstance(memory_mib, bool) or not isinstance(memory_mib, int) or not 128 <= memory_mib <= 4096:
+        raise DrillError('Hukommelsesgrænsen skal være 128–4096 MiB pr. underproces.')
     redis = shutil.which('redis-server')
     if not redis:
         raise DrillError('redis-server mangler; kør øvelsen i all-in-one-containeren.')
@@ -98,14 +129,14 @@ def run(archive, key=None, *, timeout=30):
                    SF_RDAP='0', DRILL_HTTP_SOCKET=str(hsock), PYTHONDONTWRITEBYTECODE='1')
         processes = []
         try:
-            processes.append(subprocess.Popen([redis, '--port', '0', '--bind', '127.0.0.1',
+            processes.append(_start_bounded([redis, '--port', '0', '--bind', '127.0.0.1',
                 '--unixsocket', str(rsock), '--unixsocketperm', '600', '--dir', str(restored / 'redis'),
                 '--dbfilename', 'dump.rdb', '--save', '', '--appendonly', 'no', '--daemonize', 'no'],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+                memory_mib=memory_mib))
             deadline = time.monotonic() + timeout
             while True:
                 if processes[0].poll() is not None:
-                    raise DrillError('Redis kunne ikke indlæse den gendannede Bayes-database.')
+                    raise DrillError('Redis kunne ikke indlæse den gendannede Bayes-database eller overskred ressourcegrænsen.')
                 try:
                     if _redis(rsock, b'PING').startswith(b'+PONG'):
                         break
@@ -118,11 +149,11 @@ def run(archive, key=None, *, timeout=30):
             if not response.startswith(b':'):
                 raise DrillError('Redis/Bayes kunne ikke læses.')
             keys = int(response[1:].strip())
-            processes.append(subprocess.Popen([sys.executable, '-c', BOOTSTRAP], env=env,
-                cwd=str(Path(__file__).parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            processes.append(_start_bounded([sys.executable, '-c', BOOTSTRAP], env=env,
+                cwd=str(Path(__file__).parent), memory_mib=memory_mib))
             while True:
                 if processes[1].poll() is not None:
-                    raise DrillError('Applikationen kunne ikke starte med den gendannede database.')
+                    raise DrillError('Applikationen kunne ikke starte med den gendannede database eller overskred ressourcegrænsen.')
                 try:
                     with socket.socket(socket.AF_UNIX) as sock:
                         sock.settimeout(2)
@@ -138,6 +169,8 @@ def run(archive, key=None, *, timeout=30):
                 time.sleep(.05)
             return dict(ok=True, checked_at=int(time.time()), databases=len(databases),
                         redis_keys=keys, app_started=True, network='unix_sockets_only',
+                        child_limits=dict(memory_mib_max=memory_mib, cpu_seconds_max=CPU_SECONDS,
+                                          open_files_max=OPEN_FILES, core_dump_bytes_max=0),
                         scope='SQLite, web application startup and Redis/Bayes; no mail workers, Rspamd or ClamAV')
         finally:
             for proc in reversed(processes):

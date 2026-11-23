@@ -2,6 +2,14 @@
 
 ## Under udvikling efter 2.15.0-beta
 
+- Familiens »Hvorfor?« bruger den registrerede blokering fra afgørelsen og
+  omskriver ikke gamle mails med nye regler. Manglende forklaring udlægges ikke
+  som en udokumenteret scoreoverskridelse. Reserveret prøvemateriale får en
+  forståelig hændelsestekst uden at ændre knapper eller adgangsregler.
+- Gendannelsesprøvens app-/Redis-underprocesser får grænser for virtuel
+  hukommelse, CPU, åbne filer og core dumps. `backup-drill --memory-mib` vælger
+  128–4096 MiB pr. underproces; standard er 1024. Dette er stadig app/Redis-
+  prøven, ikke en separat gendannet hel-stak-container.
 - `sfctl policy-trial` kan registrere en kandidatgrænse parallelt på én postkasse
   uden mailhandlinger eller aktivering. Bevarer beskyttede modtageres grænse,
   rapporterer logiske forskelle og adskiller resultater ved skift af kandidat.
