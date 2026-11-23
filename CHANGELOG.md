@@ -2,6 +2,11 @@
 
 ## Under udvikling efter 2.15.0-beta
 
+- AI-poster får versionsgrundlag for prompt/fakta/politik og faktisk request-
+  konfiguration uden mailindhold eller lokal URL. Gamle poster forbliver ukendte;
+  modeltag er ikke et verificeret fingerprint af modelvægtene.
+- Ugyldigt AI-JSON tælles som fejl med backoff. Ekstremt store confidence-tal
+  afvises uden at afbryde fortolkningen. AI-point og aktive regler er uændrede.
 - Lokale, kontobundne beslutningsspor gemmer den rene politiks input/resultat
   uden mailtekst. `sfctl policy-preview` kan reproducere dem og afprøve en
   anden scoregrænse uden mailhandlinger eller konfigurationsændringer.

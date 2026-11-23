@@ -550,3 +550,29 @@ som en blind mærkningsproces. Der er endnu ingen automatisk repræsentativ
 udtagning eller fuld kontrol af labels' påvirkning på alle tillidssignaler.
 Databasen skal gendannes sammen med reservationerne ved backup/rollback;
 ældre kode respekterer ikke den nye reservation.
+
+### Versionsgrundlag for AI-vurderinger (under udvikling)
+
+Nye AI-poster gemmer promptversion, version af faktaudtræk, fingerprint af
+systeminstruktionen, AI-politikversion samt fingerprint og JSON for de faktisk
+anvendte request-indstillinger og pointgrænser. Promptgrundlaget fastholdes,
+når jobbet lægges i kø; request-indstillingerne registreres, når kaldet sendes.
+Tilfældige mail-delimiters normaliseres før promptens fingerprint beregnes.
+Hverken mailindholdet eller Ollamas lokale URL gemmes i disse metadata.
+
+Gamle poster har `null` i de nye felter; deres opsætning kan ikke udledes
+bagefter. Det eksisterende `model`-felt er et **konfigureret modeltag**, som
+kan pege på ændrede vægte hos modelserveren. Metadata er derfor ikke bevis
+for identiske modelvægte eller for, at en model kan reproducere hvert svar.
+
+Sammenlign kun AI-resultater med samme dokumenterede model/prompt/fakta/
+politik- og indstillingsgrundlag og hold postkasserne adskilt. AI'ens confidence
+er fortsat dens eget udsagn. Eksisterende AI-brugerrettelser er et udvalgt
+prøvemateriale; første-scanningsmålet fra `quality-export` ligger fortsat **før
+AI** og må ikke bruges som mål for AI'ens præcision.
+
+Ugyldigt AI-JSON og ugyldige confidence-værdier giver ingen point. De registreres
+nu som fejl med den eksisterende backoff; et ekstremt stort numerisk confidence
+kan heller ikke afbryde fortolkningen. Filtreringen fortsætter efter sin
+almindelige vurdering. Testene bruger en falsk Ollama-server; faktisk modstand
+mod prompt-injektion og forbedring på familiens mail er endnu ikke målt.

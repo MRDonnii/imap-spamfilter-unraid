@@ -725,3 +725,79 @@ def test_protected_mail_is_never_applied():
     msg = {"user_verdict": None, "our_action": "none", "threat": None, "current_folder": "INBOX",
            "symbols": '[{"n": "TH_PROTECTED_RCPT", "s": 0}, {"n": "TH_LURE_SUBJECT", "s": 1.5}]'}
     assert ai._block_reason(None, None, msg, {"folder": "INBOX"}) == "contact"
+
+
+def test_overflow_confidence_is_invalid_instead_of_crashing():
+    result = ai.parse_reply({'verdict': 'spam', 'confidence': 10 ** 1000, 'reason': 'neutral'})
+    assert result == ('unsure', 0.0, 'neutral', False)
+
+
+def test_invalid_reply_counts_as_error_without_adding_points(eng, monkeypatch, ollama):
+    ollama.reply = 'not JSON'
+    h = harness(eng, monkeypatch, mode='on')
+    h.deliver('invalid@sample.example', score=6)
+    h.scan()
+    rows, wakes = drain(h)
+    assert rows[0]['status'] == 'error'
+    assert rows[0]['error'] == 'ugyldigt svar' and rows[0]['points'] == 0
+    assert not wakes and apply(h) == 0
+    assert h.row('invalid@sample.example')['our_action'] == 'none'
+    assert ai.health(h.db.conn)['errors'] == 1
+
+
+def test_prompt_identity_ignores_mail_content_and_nonce_but_tracks_extraction_version(monkeypatch):
+    a = ai.build_messages(ai.MailFacts(subject='PRIVATE SUBJECT A', text='PRIVATE BODY A'), nonce='a1')
+    b = ai.build_messages(ai.MailFacts(subject='PRIVATE SUBJECT B', text='PRIVATE BODY B'), nonce='b2')
+    first = ai.prompt_identity(a)
+    assert first == ai.prompt_identity(b)
+    assert len(first['prompt_sha256']) == 64
+    assert 'PRIVATE' not in json.dumps(first)
+    monkeypatch.setattr(ai, 'FACTS_VERSION', ai.FACTS_VERSION + 1)
+    assert ai.prompt_identity(a)['prompt_sha256'] != first['prompt_sha256']
+    assert ai.prompt_identity([{'role': 'user', 'content': 'no known system prompt'}]) == {}
+
+
+def test_request_identity_keeps_controls_but_never_mail_or_lan_address():
+    settings = ai.normalize_settings(dict(url=URL, model='example:1'))
+    body = ai.chat_body(settings, [{'role': 'user', 'content': 'PRIVATE BODY'}])
+    meta = ai.settings_identity(settings, body)
+    assert 'PRIVATE' not in meta['settings_json'] and URL not in meta['settings_json']
+    assert json.loads(meta['settings_json'])['generation_options']['num_ctx'] == ai.NUM_CTX
+    changed = ai.chat_body(dict(settings, model='example:2'), body['messages'])
+    assert ai.settings_identity(dict(settings, model='example:2'), changed)['settings_sha256'] != meta['settings_sha256']
+    assert ai.settings_identity(dict(settings, url='http://192.168.1.20:11434'), body) == meta
+
+
+def test_queued_prompt_provenance_and_actual_request_controls_are_preserved(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode='shadow')
+    h.deliver('versioned@sample.example', score=6)
+    h.scan()
+    queued_prompt_version = ai.PROMPT_VERSION
+    monkeypatch.setattr(ai, 'PROMPT_VERSION', queued_prompt_version + 1)
+    monkeypatch.setattr(ai, 'NUM_CTX', 8192)
+    rows, _ = drain(h)
+    assert rows[0]['prompt_version'] == queued_prompt_version
+    assert len(rows[0]['prompt_sha256']) == len(rows[0]['settings_sha256']) == 64
+    assert json.loads(rows[0]['settings_json'])['generation_options']['num_ctx'] == 8192
+    stored = h.db.conn.execute('SELECT * FROM ai_verdicts').fetchone()
+    assert stored['prompt_sha256'] == rows[0]['prompt_sha256']
+    assert stored['settings_json'] == rows[0]['settings_json']
+    item = ai.evaluation(h.db.conn, now=h.t)['items'][0]
+    assert item['prompt_version'] == queued_prompt_version
+    assert item['settings_sha256'] == stored['settings_sha256']
+
+
+def test_legacy_ai_metadata_is_unknown_and_migration_is_idempotent():
+    import sqlite3
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("CREATE TABLE ai_verdicts(id INTEGER PRIMARY KEY, account TEXT NOT NULL, "
+                     "message_id TEXT NOT NULL, mode TEXT NOT NULL, status TEXT NOT NULL, applied TEXT, created_at INTEGER NOT NULL)")
+        conn.execute("INSERT INTO ai_verdicts(account,message_id,mode,status,created_at) VALUES('a','legacy','shadow','ok',1)")
+        ai.ensure_schema(conn)
+        ai.ensure_schema(conn)
+        row = conn.execute('SELECT * FROM ai_verdicts').fetchone()
+        assert all(row[name] is None for name in ai.META_COLUMNS)
+    finally:
+        conn.close()

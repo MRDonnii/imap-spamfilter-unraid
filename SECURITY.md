@@ -242,3 +242,19 @@ Scanning er IMAP-efterbehandling, og læste/store mails samt antivirusnedetid be
 
 
 **Gamle opslag og trusler:** Kendte 2.14-rækker uden indholdsbinding bruges ikke til headerbaseret måludvælgelse i kontoforbindelser. Det stopper også gamle ventende lærejob i at træne på en anden mail med genbrugt ID. Brug **Find en mail** for at binde en konkret kopi før en manuel handling. En gammel kendt trussel følger som konservativ adgangsbegrænsning med til en ny, endnu ikke scannet alias-identitet: kun administrator med bekræftelse kan frigive den, og den læres ikke som legitim. Når den oprindelige mails indhold er kendt via fingerprint, kan en anden mails egen scanning give en selvstændig klassifikation. Uden den oprindelige binding bevares det gamle administratorkrav konservativt; en ny score alene kan ikke modbevise den gamle virusmarkering. En bekræftet frigivelse bevarer trusselsmærket, så senere flytning i mailprogrammet ikke lærer mailen som legitim. Gamle afbrudte flytninger uden indholdsbinding/journalbevis skal kontrolleres manuelt; der slettes ingen kildekopi alene ud fra samme header-ID. Ventende flytninger med deres oprindelige UID/UIDVALIDITY-bevis bevarer den eksisterende køpolitik.
+
+## Lokale evalueringsdata (under udvikling efter 2.15.0-beta)
+
+Holdout-registret indeholder indholdsfingerprints og neutrale prøve-ID'er.
+Beslutningsspor indeholder komplette politiksymboler, relevante brugerafgørelser,
+valgte afsenderregler og autentificeringsdomæner, men ingen body eller emne.
+Sporene er kontobundne driftsdata og slettes med de forældreløse mailposter.
+Hashes er ikke anonymisering; beskyt databasen og lokale eksport-/mailfiler.
+
+Nye AI-metadata identificerer systemprompt/faktaudtræk og den anvendte request-
+konfiguration uden mailtekst eller lokal URL. De beviser hverken identiske
+modelvægte, korrekt AI-confidence eller modstand mod alle prompt-injektioner.
+Gamle AI-poster får ingen efterkonstrueret version. Reservationer hindrer
+matchende fremtidig Bayes/fuzzy-læring gennem den nye appkode, men tilbagefører
+ikke historisk læring og begrænser ikke ejerens øvrige mailhandlinger.
+Ældre kode håndhæver ikke reservationerne. Se CONFIGURATION.md for omfanget.
