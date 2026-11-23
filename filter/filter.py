@@ -236,7 +236,7 @@ ALLOW_DISTRUST_SYMBOLS = DMARC_SPOOF_SYMBOLS | frozenset({
 STAT_METRICS = frozenset({
     "scanned", "spam_detected", "moved", "flagged", "released", "marked_spam",
     "learned_spam", "learned_ham", "skipped_seen", "skipped_no_msgid",
-    "skipped_oversize", "scan_failed", "scan_giveup", "allowlisted",
+    "skipped_oversize", "scan_failed", "scan_giveup", "allowlisted", "junk_identity_unverified",
     "blocklisted", "user_rescued", "user_junked", "move_failed",
     # 2.1
     "autolearned_spam", "autolearned_ham",
@@ -3128,6 +3128,14 @@ def find_uids_by_message_id(client: IMAPClient, message_id: str, *,
         conn = sqlite3.connect(DB_PATH, timeout=10)
         try:
             identity = mailidentity.binding(conn, getattr(client, "_sf_account", None), message_id)
+            account = getattr(client, "_sf_account", None)
+            if identity is None and account is not None and conn.execute(
+                    'SELECT 1 FROM messages WHERE account=? AND message_id=?',
+                    (account, message_id)).fetchone():
+                # Legacy verdicts/learns cannot select a new payload by ID
+                # alone. Find-mail can bind a concrete, explicitly selected
+                # copy; queued moves retain their original UID proof.
+                return []
         except sqlite3.OperationalError:
             pass  # rollback / test databases without the additive table
         finally:

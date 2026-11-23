@@ -209,3 +209,14 @@ def test_simultaneous_first_delivery_never_returns_another_payloads_key(eng, mon
     assert fired and key != 'racing@x'
     assert stored[1] == identity.fingerprint(changed)
     assert identity.binding(h.db.conn, h.acc.name, 'racing@x')[1] == identity.fingerprint(original)
+
+
+def test_legacy_rows_without_content_binding_are_not_header_search_targets(eng, monkeypatch):
+    h = Harness(eng, monkeypatch)
+    h.client._sf_account = h.acc.name
+    h.deliver('legacy-unbound@x', body='new delivery')
+    with h.db.tx():
+        h.db.upsert_message('legacy-unbound@x', 'Junk', 'old@example.org', 'old record')
+        h.db.update_message('legacy-unbound@x', user_verdict='ham')
+    h.client.select_folder('INBOX')
+    assert eng.find_uids_by_message_id(h.client, 'legacy-unbound@x') == []

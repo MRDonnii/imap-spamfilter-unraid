@@ -22,3 +22,6 @@ Malformed/headerless message regressions also failed before the final fingerprin
 
 
 A deterministic interleaving regression demonstrated the first-write race between a header-ID lookup and INSERT OR IGNORE. Binding now reads back the actual account/wire/fingerprint match and falls back to the content key when a competing delivery won the original ID. It never returns an unverified winner's key. The full focused identity/services/scanning/junk/notification/mailer set passed 299 tests after the fix.
+
+
+Migration regressions additionally proved that a fresh find-mail alias could otherwise bypass a legacy virus restriction and that an unbound legacy row could still target another delivery by header ID. Both now fail closed: account-aware lookups do not target unbound legacy records; a yet-unscanned alias preserves legacy threat permissions. Admin confirmation still releases without ham learning. Legacy repair without content/journal proof now leaves both copies untouched for manual review. The newly bumped unavailable-body counter is registered in STAT_METRICS (caught by the whole-suite registry test).

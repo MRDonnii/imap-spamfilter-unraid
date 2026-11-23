@@ -198,9 +198,9 @@ def test_move_capability_drop_before_server_moved_retries(eng, monkeypatch):
     assert h.client.msgids("Junk") == ["spam@x"] and h.client.msgids("INBOX") == []
 
 
-def test_legacy_move_failed_row_without_journal(eng, monkeypatch):
-    """A 2.0.x 'move_failed' with a copy in junk: completed only when the
-    inbox original is undeleted (nobody knows who set a \\Deleted)."""
+def test_legacy_move_failed_without_content_binding_needs_manual_review(eng, monkeypatch):
+    """Without a content binding or journal UID proof, matching IDs alone
+    must not authorize expunging an inbox original during legacy repair."""
     h = Harness(eng, monkeypatch, mode="move")
     idate = dt.datetime.fromtimestamp(h.t, dt.timezone.utc)
     for mid, flags in (("legacy@x", ()), ("legacy-del@x", ("\\Deleted",))):
@@ -210,9 +210,9 @@ def test_legacy_move_failed_row_without_journal(eng, monkeypatch):
             h.db.upsert_message(mid, "INBOX", "a@example.org", "x", int(h.t))
             h.db.update_message(mid, our_action="move_failed", moved_to_junk_at=int(h.t), our_score=20.0)
     _reconnect(h)
-    assert h.client.msgids("INBOX") == ["legacy-del@x"]
+    assert h.client.msgids("INBOX") == ["legacy@x", "legacy-del@x"]
     assert h.client.msgids("Junk") == ["legacy@x", "legacy-del@x"]
-    assert h.row("legacy@x")["our_action"] == "moved_to_junk"
+    assert h.row("legacy@x")["our_action"] == "move_failed"
     assert h.row("legacy-del@x")["our_action"] == "move_failed"
 
 

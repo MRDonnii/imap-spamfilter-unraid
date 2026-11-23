@@ -164,6 +164,18 @@ def _threat_of(conn: sqlite3.Connection, account: str, mid: str) -> tuple[str | 
     try:
         row = conn.execute("SELECT threat, threat_detail FROM messages WHERE account=? AND message_id=?",
                            (account, mid)).fetchone()
+        if (row is None or not row[0]) and mid.startswith(mailidentity.PREFIX):
+            identity = mailidentity.binding(conn, account, mid)
+            if identity and identity[0] and identity[0] != mid:
+                scanned = conn.execute('SELECT scanned_at FROM messages WHERE account=? AND message_id=?',
+                                       (account, mid)).fetchone()
+                if scanned is None or scanned[0] is None:
+                    # A new alias must not discard an old virus restriction
+                    # before this concrete payload has had its own scan.
+                    legacy = conn.execute('SELECT threat, threat_detail FROM messages '
+                                          'WHERE account=? AND message_id=?', (account, identity[0])).fetchone()
+                    if legacy and legacy[0]:
+                        row = legacy
     except sqlite3.Error:
         return None, None
     if row is None or not row[0]:

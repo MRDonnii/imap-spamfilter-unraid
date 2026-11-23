@@ -191,3 +191,6 @@ Denne udgivelse leveres som signeret kildepakke til den eksisterende WebUI-opdat
 Tag en aktuel backup før installation. Efter opdateringen: kontroller versionsnummer, `sfctl doctor`, kontoernes forbindelser og **Drift → Scanningens dækning**. Dækningstabellen kræver nye hændelser; gamle brugerrettelser uden en ny første-scanningsobservation kan ikke indgå i den nye evaluering. En ældre frigivelse uden indholdsfingerprint kan kræve genfrigivelse, hvis mailen leveres til indbakken på ny.
 
 Den eksisterende opdateringsmekanisme bevarer det tidligere image og kildebackup til teknisk rollback. Skemaændringerne er additive, men gammel kode har igen de ID-fejl, som 2.15 retter. Brug derfor ikke en rollback som en vedvarende sikkerhedsløsning. Ved fuld datagendannelse skal kode, state og Redis passe sammen; følg BACKUP.md. Denne udgivelses arbejde ændrer ikke i sig selv din server eller dine postkasser.
+
+
+**Ældre beskeder:** Hvis en handling på en gammel post siger, at mailen ikke findes, brug **Find en mail** på afsender/emne og vælg den konkrete kopi. Gamle ID'er uden indholdsbinding bruges ikke til at genfinde post til læring eller reparation. Dette kan også efterlade gamle afbrudte kopiflytninger til manuel kontrol. Eksisterende virusmarkeringer mister ikke administratorkravet ved denne genfinding.

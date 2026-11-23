@@ -1947,3 +1947,26 @@ def test_live_find_and_release_uses_content_identity(live, caps, wire):
     live_loop(live, h, n=3, step=400)
     assert len(live.rspamd.scan_calls) == scans
     assert live.rspamd.learn_calls == []
+
+
+def test_legacy_threat_cannot_be_released_via_a_new_search_identity(live):
+    h = live_account(live, SCAN)
+    catch_spam(live, h, ['danger@x'])
+    with h.db.tx():
+        h.db.update_message('danger@x', threat='virus', threat_detail='Legacy.Test')
+        h.db.conn.execute('DELETE FROM mail_identity WHERE account=?', (h.acc.name,))
+    res = services.find_mail('anna', 'danger', since_days=7, engine=live.eng)
+    hit = next(g for g in res['folders'] if g['name'] == 'Spamfilter')['hits'][0]
+    assert hit['message_id'].startswith('sf-local:')
+    h.box.writes.clear()
+    out = services.move_found_to_inbox('anna', 'Spamfilter', hit['message_id'], 'user', engine=live.eng)
+    assert out['code'] == 'threat_admin', out
+    assert h.box.writes == []
+    assert not live.rspamd.learn_calls
+    out = services.move_found_to_inbox('anna', 'Spamfilter', hit['message_id'], 'admin',
+                                      engine=live.eng, is_admin=True)
+    assert out['code'] == 'threat_confirm' and h.box.writes == []
+    out = services.move_found_to_inbox('anna', 'Spamfilter', hit['message_id'], 'admin', learn=True,
+                                      engine=live.eng, is_admin=True, confirm_threat=True)
+    assert out['ok'] and out['learned'] is None, out
+    assert not live.rspamd.learn_calls
