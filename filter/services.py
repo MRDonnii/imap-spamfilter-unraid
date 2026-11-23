@@ -169,7 +169,8 @@ def _threat_of(conn: sqlite3.Connection, account: str, mid: str) -> tuple[str | 
             if identity and identity[0] and identity[0] != mid:
                 scanned = conn.execute('SELECT scanned_at FROM messages WHERE account=? AND message_id=?',
                                        (account, mid)).fetchone()
-                if scanned is None or scanned[0] is None:
+                original = mailidentity.binding(conn, account, identity[0])
+                if original is None or scanned is None or scanned[0] is None:
                     # A new alias must not discard an old virus restriction
                     # before this concrete payload has had its own scan.
                     legacy = conn.execute('SELECT threat, threat_detail FROM messages '
@@ -611,6 +612,7 @@ def _record_verdict(db: Any, eng: Any, acc: Any, mid: str, *, folder: str, verdi
         except Exception:
             pass
     with db.tx():
+        retained_threat, retained_detail = _threat_of(db.conn, acc.name, mid)
         if raw is not None and hasattr(eng, "normalize_message_id"):
             # The real engine has the additive identity table. Fake engines
             # used by old versions may expose only the original interface.
@@ -651,6 +653,9 @@ def _record_verdict(db: Any, eng: Any, acc: Any, mid: str, *, folder: str, verdi
         if not keep_pending_move:
             db.conn.execute("DELETE FROM pending_move WHERE account=? AND message_id=?",
                             (acc.name, mid))
+        if retained_threat:
+            db.conn.execute('UPDATE messages SET threat=?, threat_detail=? WHERE account=? AND message_id=?',
+                            (retained_threat, retained_detail, acc.name, mid))
         db.log_event(event, mid, detail=f"actor={actor}" if actor else None)
     if stat:
         # Outside the transaction: bump_stat may manage its own commit.
@@ -2164,6 +2169,7 @@ def _premark_inbox(db: Any, acc: Any, mid: str, *, inbox: str, verdict: str | No
         (acc.name, mid)).fetchone()
     snapshot = dict(prev) if prev is not None else None
     with db.tx():
+        retained_threat, retained_detail = _threat_of(conn, acc.name, mid)
         conn.execute(
             """
             INSERT INTO messages(account, message_id, first_seen, last_seen, current_folder,
@@ -2189,6 +2195,11 @@ def _premark_inbox(db: Any, acc: Any, mid: str, *, inbox: str, verdict: str | No
             conn.execute("UPDATE messages SET verdict_by=COALESCE(verdict_by, ?) "
                          "WHERE account=? AND message_id=?", (by or None, acc.name, mid))
         conn.execute("DELETE FROM pending_move WHERE account=? AND message_id=?", (acc.name, mid))
+        if retained_threat:
+            # Keep known danger on an alias before the inbox worker sees
+            # the move. A later mail-program rescue must not learn it ham.
+            conn.execute('UPDATE messages SET threat=?, threat_detail=? WHERE account=? AND message_id=?',
+                         (retained_threat, retained_detail, acc.name, mid))
     return snapshot
 
 

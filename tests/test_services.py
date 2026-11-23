@@ -1958,6 +1958,11 @@ def test_legacy_threat_cannot_be_released_via_a_new_search_identity(live):
     res = services.find_mail('anna', 'danger', since_days=7, engine=live.eng)
     hit = next(g for g in res['folders'] if g['name'] == 'Spamfilter')['hits'][0]
     assert hit['message_id'].startswith('sf-local:')
+    with h.db.tx():
+        h.db.upsert_message(hit['message_id'], 'Spamfilter', 'sender@example.org', 'rechecked')
+        h.db.update_message(hit['message_id'], scanned_at=int(live.clock.t), our_score=0)
+    # A new score alone cannot disprove an old virus finding whose content
+    # was never fingerprinted (the current AV may be unavailable).
     h.box.writes.clear()
     out = services.move_found_to_inbox('anna', 'Spamfilter', hit['message_id'], 'user', engine=live.eng)
     assert out['code'] == 'threat_admin', out
@@ -1970,3 +1975,17 @@ def test_legacy_threat_cannot_be_released_via_a_new_search_identity(live):
                                       engine=live.eng, is_admin=True, confirm_threat=True)
     assert out['ok'] and out['learned'] is None, out
     assert not live.rspamd.learn_calls
+    assert live_row(h, hit['message_id'])['threat'] == 'virus'
+
+
+def test_different_fingerprinted_payload_uses_its_own_threat_classification(live):
+    h = live_account(live, SCAN)
+    with h.db.tx():
+        identity = live.eng.mailidentity
+        identity.bind(h.db.conn, h.acc.name, 'different@x', make_message('different@x', subject='old'))
+        key = identity.bind(h.db.conn, h.acc.name, 'different@x', make_message('different@x', subject='new'))
+        h.db.upsert_message('different@x', 'Spamfilter', 'sender@example.org', 'old')
+        h.db.update_message('different@x', threat='virus')
+        h.db.upsert_message(key, 'Spamfilter', 'sender@example.org', 'new')
+        h.db.update_message(key, scanned_at=int(live.clock.t), threat=None)
+    assert services._threat_of(h.db.conn, h.acc.name, key) == (None, None)
