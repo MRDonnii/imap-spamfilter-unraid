@@ -43,6 +43,7 @@ class Decision:
     events: list = field(default_factory=list)    # 2.1: (event, detail) to log
     reason: str = "score"
     policy_version: int = POLICY_VERSION
+    policy_input: dict | None = field(default=None, repr=False, compare=False)
 
 
 def sticky_ham(row: Any) -> bool:

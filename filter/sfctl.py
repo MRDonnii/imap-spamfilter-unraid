@@ -1903,6 +1903,20 @@ def cmd_quality_compare(args):
     return EXIT_OK
 
 
+def cmd_policy_preview(args):
+    import decisiontrace
+    try:
+        conn = sqlite3.connect(Path(ui.DB_PATH).resolve().as_uri() + '?mode=ro', uri=True)
+        try:
+            result = decisiontrace.preview(conn, args.account, threshold=args.threshold, limit=args.limit)
+        finally:
+            conn.close()
+    except ValueError as ex:
+        raise CliError('Prøve afvist: ' + str(ex)) from None
+    out(json.dumps(result, ensure_ascii=False, indent=2))
+    return EXIT_OK
+
+
 def cmd_quality_reserve(args):
     import holdout
     try:
@@ -2384,6 +2398,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("push-test", "send en testbesked nu til alle en brugers enheder", cmd_push_test)
     p.add_argument("user", metavar="BRUGER", help="brugernavnet (se sfctl users)")
     add("push-reset", "nødstop: fjern alle enheder med beskeder og lav en ny nøgle (VAPID)", cmd_push_reset)
+    p = add("policy-preview", "afprøv gemte policy-input lokalt uden mailhandlinger", cmd_policy_preview)
+    p.add_argument("account", help="postkassens interne navn")
+    p.add_argument("--threshold", type=float, default=None, help="prøv en anden scoregrænse; gemmes ikke")
+    p.add_argument("--limit", type=int, default=100, help="seneste antal mails, 1–200 (standard 100)")
     p = add("quality-evaluate", "evaluér et lokalt mærket holdout-sæt uden træning", cmd_quality_evaluate)
     p.add_argument("file", help="lokal JSONL-fil; se CONFIGURATION.md")
     p = add("quality-reserve", "reservér lokal .eml mod fremtidig Bayes/fuzzy-læring", cmd_quality_reserve)

@@ -52,6 +52,7 @@ import mailidentity
 import quality
 import decisionpolicy
 import holdout
+import decisiontrace
 
 # A1: the container runs `python -u filter.py`, so this module is __main__.
 # Register it under its import name too so `import filter` in services,
@@ -1470,6 +1471,7 @@ def init_db() -> None:
         conn.executescript(mailidentity.SCHEMA)
         conn.executescript(quality.SCHEMA)
         conn.execute(holdout.SCHEMA)
+        conn.executescript(decisiontrace.SCHEMA)
         _migrate(conn)
         conn.executescript(SCHEMA_INDEXES)
         try:
@@ -2264,6 +2266,9 @@ class Db:
             """,
             (self.account, cutoff),
         )
+        self.conn.execute("DELETE FROM decision_traces WHERE account=? AND NOT EXISTS "
+                          "(SELECT 1 FROM messages m WHERE m.account=decision_traces.account "
+                          "AND m.message_id=decision_traces.message_key)", (self.account,))
         self.conn.execute("DELETE FROM scan_observations WHERE account=? AND NOT EXISTS "
                           "(SELECT 1 FROM messages m WHERE m.account=scan_observations.account "
                           "AND m.message_id=scan_observations.message_key)", (self.account,))
@@ -4458,10 +4463,24 @@ def _decide(db: Db, acc: Account, prior: sqlite3.Row | None, sender_addr: str | 
     """
     rule = (match_sender_rule(db.conn, acc.name, sender_addr)
             if sender_addr and not _sticky_ham(prior) and threat != "virus" else None)
-    return decisionpolicy.decide(prior, rule, final, names,
-                                 threshold=acc.threshold if threshold is None else threshold,
-                                 from_header=from_header, auth=auth,
-                                 aged_unverified=aged_unverified, threat=threat)
+    effective = acc.threshold if threshold is None else threshold
+    decision = decisionpolicy.decide(prior, rule, final, names, threshold=effective,
+                                     from_header=from_header, auth=auth,
+                                     aged_unverified=aged_unverified, threat=threat)
+    try:
+        decision.policy_input = decisiontrace.inputs(prior, rule, final, names, threshold=effective,
+                                                    from_header=from_header, auth=auth,
+                                                    aged_unverified=aged_unverified, threat=threat)
+    except (ValueError, TypeError, AttributeError) as ex:
+        logging.getLogger(acc.name).warning("policy evidence unavailable: %s", type(ex).__name__)
+    return decision
+
+
+def _record_policy_trace(db: Db, msgid: str, stage: str, decision: Decision, now: int) -> None:
+    try:
+        decisiontrace.record(db.conn, db.account, msgid, stage, decision, now)
+    except (sqlite3.Error, ValueError, TypeError) as ex:
+        logging.getLogger(db.account).warning("policy trace unavailable: %s", type(ex).__name__)
 
 
 def effective_threshold(acc: Account, ctx: dict[str, Any] | None) -> tuple[float, str | None]:
@@ -5568,6 +5587,7 @@ def _scan_and_act(client: IMAPClient, db: Db, log: logging.Logger, acc: Account,
         db.upsert_message(msgid, fmap["inbox"], sender, subject, meta.received_at)
         db.update_message(msgid, **fields)
         quality.observe(db.conn, db.account, msgid, final, thr, decision.spam, VERSION, now)
+        _record_policy_trace(db, msgid, "scan", decision, now)
         db.conn.execute(
             "UPDATE messages SET origin=COALESCE(origin, 'inbox_scan') WHERE account=? AND message_id=?",
             (db.account, msgid))
@@ -5879,6 +5899,7 @@ def _rescan_act(client: IMAPClient, db: Db, log: logging.Logger, acc: Account, u
         rule_hit=sc.decision.rule_hit, threat=sc.threat, threat_detail=sc.threat_detail,
         aged=1 if sc.aged else 0, last_seen=now)
     with db.tx():
+        _record_policy_trace(db, msgid, "rescan_policy", sc.decision, now)
         dequeue()
         if seen and not sc.threat:
             # Read mail is never taken away for spam alone (B19): the user
@@ -6469,6 +6490,7 @@ def _execute_due_moves_in(client: IMAPClient, db: Db, log: logging.Logger, acc: 
                                        auth=parse_sender_auth(msg["sender_auth"]), threat=threat,
                                        aged_unverified=bool(msg["aged"]) and
                                        "TH_AGED_UNVERIFIED" in (msg["symbols"] or ""))
+                    _record_policy_trace(db, msgid, "pending_allow_recheck", decision, int(_now()))
                     if decision.spam or not decision.rule_hit:
                         current_allow = None
                 else:

@@ -478,10 +478,33 @@ genkontrol før ventende flytninger i en ren funktion uden SQL, netværk eller
 læring. Motoren vælger fortsat den aktuelle kontos afsenderregel og kontrollerer
 mailidentitet og flag omkring kaldet. Resultatet har `policy_version=1` og en
 stabil `reason`, fx `virus`, `sender_block`, `allow_distrusted` eller `score`.
-Disse felter er foreløbig runtime-metadata; der gemmes endnu ikke en komplet
-beslutningshistorik. Asynkrone AI-, kampagne- og ZAP-forløb er ikke alle samlet
-under denne grænse. Udskillelsen ændrer ikke beslutningsrækkefølgen, herunder
-at en allerede eksplicit frigivet mail bevarer sin sticky brugerafgørelse.
+`decision_traces` gemmer nu forbrugt policy-input og resultat ved første scan,
+ved aktive genscanningsafgørelser og ved genkontrol af almindelige tilladelser
+før flytning. Identiske spor for samme konto/mail/stadie deduplikeres, og
+forældreløse spor slettes med kontoens normale oprydning af mailposter.
+Sporene indeholder scorer, komplette symbolnavne, den valgte afsenderregel,
+autentificeringsdomæner og relevante tidligere brugerafgørelser; ingen body
+eller emne. De er lokale driftsdata og skal beskyttes sammen med databasen.
+
+En lokal, skrivebeskyttet prøve kan bruge de seneste gemte første-scannings-input:
+
+```sh
+docker exec spamfilter sfctl policy-preview mailbox-a --threshold 10 --limit 100
+```
+
+Dette prøver den rene politik med en anden scoregrænse. Ingen indstilling gemmes,
+og der scannes, flyttes eller trænes ingen mail. Trusselsprioritet, sticky
+frigivelser og regelbeslutninger bevares. Uden `--threshold` kontrolleres, om den
+nuværende politik kan reproducere de gemte afgørelser. Resultatet viser
+antal ændrede afgørelser, afgørelsesgrunde, politikversioner og eventuelle ugyldige
+spor. Der udskrives interne spor-ID'er, ikke mail-ID'er eller fulde regelinput.
+
+Prøven bruger **de daværende regler og signaler**. Den er ikke en genscanning,
+en måling mod menneskeligt facit eller en baggrundsprøve på levende trafik.
+Asynkrone AI-/kampagneafgørelser og de omkringliggende IMAP-/ZAP-værn er endnu
+ikke en komplet samlet beslutningshistorik. Udskillelsen og sporene ændrer ikke
+beslutningsrækkefølgen, herunder at en allerede eksplicit frigivet mail bevarer
+sin sticky brugerafgørelse.
 
 ### Reservér prøvemateriale mod fremtidig læring (under udvikling)
 

@@ -191,6 +191,27 @@ def test_quality_reserve_keeps_mail_local_and_writes_only_a_content_reservation(
     assert last_audit(env)['action'] == 'quality_reserve'
 
 
+def test_policy_preview_is_account_scoped_read_only_and_never_contacts_imap(env, capsys, monkeypatch):
+    import decisiontrace
+    import decisionpolicy
+    decision = decisionpolicy.decide(None, None, 10, frozenset(), threshold=8)
+    decision.policy_input = decisiontrace.inputs(None, None, 10, frozenset(), threshold=8)
+    with sqlite3.connect(env.db) as conn:
+        decisiontrace.record(conn, 'bynet', 'private-id', 'scan', decision, 1)
+        decisiontrace.record(conn, 'other-account', 'other-id', 'scan', decision, 1)
+    original = env.db.read_bytes()
+    monkeypatch.setattr(engine, 'connect', lambda *a, **kw: pytest.fail('preview must not contact IMAP'))
+    code, out, err = run(capsys, monkeypatch, 'policy-preview', 'bynet', '--threshold', '12')
+    assert code == 0 and not err
+    result = json.loads(out)
+    assert result['sampled'] == result['changed'] == 1
+    assert not result['items'][0]['candidate_spam']
+    assert 'private-id' not in out and 'other-account' not in out
+    assert not result['automatic_activation']
+    assert env.db.read_bytes() == original
+    assert audit_records(env) == []
+
+
 def test_status(env, capsys, monkeypatch):
     (env.state / "heartbeat").write_text(f"{int(__import__('time').time()) - 5} boot\n")
     dashboard.settings_set("external_url", "https://spam.example.dk")

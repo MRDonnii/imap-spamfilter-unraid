@@ -2,6 +2,10 @@
 
 ## Under udvikling efter 2.15.0-beta
 
+- Lokale, kontobundne beslutningsspor gemmer den rene politiks input/resultat
+  uden mailtekst. `sfctl policy-preview` kan reproducere dem og afprøve en
+  anden scoregrænse uden mailhandlinger eller konfigurationsændringer.
+  Prøven bruger de gemte regler og signaler og er ikke en ny scanning.
 - `sfctl quality-reserve` reserverer en lokal mailfil mod fremtidig Bayes- og
   fuzzy-læring gennem appen, også på tværs af konti og import uden Message-ID.
   Kun fingerprint/ID/tid gemmes. Kendt tidligere læring afvises; historisk
