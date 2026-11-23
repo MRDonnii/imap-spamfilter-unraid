@@ -2,6 +2,9 @@
 
 ## Under udvikling efter 2.15.0-beta
 
+- `sfctl policy-trial` kan registrere en kandidatgrænse parallelt på én postkasse
+  uden mailhandlinger eller aktivering. Bevarer beskyttede modtageres grænse,
+  rapporterer logiske forskelle og adskiller resultater ved skift af kandidat.
 - AI-poster får versionsgrundlag for prompt/fakta/politik og faktisk request-
   konfiguration uden mailindhold eller lokal URL. Gamle poster forbliver ukendte;
   modeltag er ikke et verificeret fingerprint af modelvægtene.

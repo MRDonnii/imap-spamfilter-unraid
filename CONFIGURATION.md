@@ -576,3 +576,38 @@ nu som fejl med den eksisterende backoff; et ekstremt stort numerisk confidence
 kan heller ikke afbryde fortolkningen. Filtreringen fortsætter efter sin
 almindelige vurdering. Testene bruger en falsk Ollama-server; faktisk modstand
 mod prompt-injektion og forbedring på familiens mail er endnu ikke målt.
+
+### Parallel prøve på én postkasse (under udvikling)
+
+Ejeren kan registrere en kandidatgrænse parallelt med fremtidige normale
+første-scanninger på en bestemt konto:
+
+```sh
+docker exec spamfilter sfctl policy-trial mailbox-a --threshold 10
+docker exec spamfilter sfctl policy-trial mailbox-a
+docker exec spamfilter sfctl policy-trial mailbox-a --stop
+```
+
+Dette ændrer kun prøvens lokale metadata. Den aktive scoregrænse, regler,
+mailflag, flytninger, læring og beskeder bevares. Kandidaten vurderes på præcis
+de samme score-/regel-/trusselsinput som baseline, før AI. Den får ingen vej til
+at aktivere sin afgørelse. Beskyttede modtagere beholder deres højere grænse;
+virus, eksplicitte blokeringer og verificerede undtagelser følger den fælles politik.
+
+Rapporten viser hvor mange beholdte observationer der ville få samme, en
+strengere eller en lempeligere spamafgørelse, med filter-/politikversionsgrupper.
+Den viser ingen mail-ID'er. Der indgår hverken menneskeligt facit eller en
+beregnet træfsikkerhed. Læste/store/fravalgte mails, genscanning og senere
+AI-/kampagneafgørelser er uden for denne prøve. Der bestilles ingen ekstra
+scanning af gamle mails.
+
+Samme aktive kandidatgrænse kan angives igen uden at nulstille prøven. En ny
+grænse lukker den gamle prøve og starter en ny. Stop bevarer den beholdte
+historik, men optager ikke flere observationer. Observationer følger kontoens
+normale oprydning af mailposter; tællerne er ikke et permanent leveringstal.
+
+Der er ingen automatisk aktivering. En senere afprøvning af en ændret aktiv
+grænse foretages bevidst på den valgte kontos eksisterende indstillingsside.
+De normale grænser og sikkerhedsbremsen for faktiske flytninger gælder fortsat.
+Flere kandidat-afgørelser er ikke i sig selv dokumentation for bedre filtrering;
+brug det lokale, menneskeligt mærkede evalueringsgrundlag før en beslutning.

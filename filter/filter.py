@@ -53,6 +53,7 @@ import quality
 import decisionpolicy
 import holdout
 import decisiontrace
+import policytrial
 
 # A1: the container runs `python -u filter.py`, so this module is __main__.
 # Register it under its import name too so `import filter` in services,
@@ -1472,6 +1473,7 @@ def init_db() -> None:
         conn.executescript(quality.SCHEMA)
         conn.execute(holdout.SCHEMA)
         conn.executescript(decisiontrace.SCHEMA)
+        conn.executescript(policytrial.SCHEMA)
         _migrate(conn)
         conn.executescript(SCHEMA_INDEXES)
         try:
@@ -2266,6 +2268,9 @@ class Db:
             """,
             (self.account, cutoff),
         )
+        self.conn.execute("DELETE FROM policy_trial_results WHERE account=? AND NOT EXISTS "
+                          "(SELECT 1 FROM messages m WHERE m.account=policy_trial_results.account "
+                          "AND m.message_id=policy_trial_results.message_key)", (self.account,))
         self.conn.execute("DELETE FROM decision_traces WHERE account=? AND NOT EXISTS "
                           "(SELECT 1 FROM messages m WHERE m.account=decision_traces.account "
                           "AND m.message_id=decision_traces.message_key)", (self.account,))
@@ -5588,6 +5593,11 @@ def _scan_and_act(client: IMAPClient, db: Db, log: logging.Logger, acc: Account,
         db.update_message(msgid, **fields)
         quality.observe(db.conn, db.account, msgid, final, thr, decision.spam, VERSION, now)
         _record_policy_trace(db, msgid, "scan", decision, now)
+        try:
+            policytrial.observe(db.conn, db.account, msgid, decision,
+                                protected_threshold=acc.protected_threshold, version=VERSION, now=now)
+        except (sqlite3.Error, ValueError, TypeError) as ex:
+            log.warning("policy trial unavailable: %s", type(ex).__name__)
         db.conn.execute(
             "UPDATE messages SET origin=COALESCE(origin, 'inbox_scan') WHERE account=? AND message_id=?",
             (db.account, msgid))

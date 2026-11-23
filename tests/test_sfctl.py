@@ -1093,3 +1093,31 @@ def test_help_lists_the_bayes_commands():
     for cmd in ("bayes-rebuild", "bayes-restore", "bayes-status"):
         assert cmd in help_text
     assert "sfctl bayes-rebuild --dry-run" in sfctl.EPILOG
+
+
+def test_policy_trial_start_status_stop_never_changes_account_config(env, capsys, monkeypatch):
+    original = env.config.read_bytes()
+    monkeypatch.setattr(engine, 'connect', lambda *a, **kw: pytest.fail('trial setup must not contact IMAP'))
+    code, out, err = run(capsys, monkeypatch, 'policy-trial', 'bynet', '--threshold', '5')
+    assert code == 0 and not err
+    result = json.loads(out)
+    assert result['trial']['status'] == 'shadow' and result['trial']['candidate_threshold'] == 5
+    assert not result['automatic_activation']
+    assert env.config.read_bytes() == original
+    assert last_audit(env)['action'] == 'policy_trial_start'
+    audits = len(audit_records(env))
+    code, out, err = run(capsys, monkeypatch, 'policy-trial', 'bynet')
+    assert code == 0 and json.loads(out)['trial']['observed'] == 0
+    assert len(audit_records(env)) == audits
+    code, out, err = run(capsys, monkeypatch, 'policy-trial', 'bynet', '--stop')
+    assert code == 0 and json.loads(out)['trial']['status'] == 'stopped'
+    assert env.config.read_bytes() == original
+    assert last_audit(env)['action'] == 'policy_trial_stop'
+
+
+def test_policy_trial_rejects_unknown_account_and_nonfinite_threshold(env, capsys, monkeypatch):
+    for account, threshold in [('other-account', '5'), ('bynet', 'nan')]:
+        code, out, err = run(capsys, monkeypatch, 'policy-trial', account, '--threshold', threshold)
+        assert code != 0 and not out
+    with sqlite3.connect(env.db) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM policy_trials').fetchone()[0] == 0

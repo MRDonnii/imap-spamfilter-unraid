@@ -1903,6 +1903,29 @@ def cmd_quality_compare(args):
     return EXIT_OK
 
 
+def cmd_policy_trial(args):
+    import policytrial
+    if args.account not in {acc.name for acc in _accounts()}:
+        raise CliError("Ukendt postkasse.")
+    conn = sqlite3.connect(Path(ui.DB_PATH).resolve().as_uri() + '?mode=rw', uri=True)
+    try:
+        now = int(time.time())
+        if args.stop:
+            policytrial.stop(conn, args.account, now)
+            audit('policy_trial_stop', account=args.account)
+        elif args.threshold is not None:
+            try:
+                trial_id = policytrial.start(conn, args.account, args.threshold, now)
+            except ValueError as ex:
+                raise CliError(str(ex)) from None
+            audit('policy_trial_start', account=args.account, detail=f'trial={trial_id}; shadow only')
+        result = policytrial.status(conn, args.account)
+    finally:
+        conn.close()
+    out(json.dumps(result, ensure_ascii=False, indent=2))
+    return EXIT_OK
+
+
 def cmd_policy_preview(args):
     import decisiontrace
     try:
@@ -2398,6 +2421,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("push-test", "send en testbesked nu til alle en brugers enheder", cmd_push_test)
     p.add_argument("user", metavar="BRUGER", help="brugernavnet (se sfctl users)")
     add("push-reset", "nødstop: fjern alle enheder med beskeder og lav en ny nøgle (VAPID)", cmd_push_reset)
+    p = add("policy-trial", "registrér en kandidatgrænse parallelt; ingen aktivering eller mailhandlinger", cmd_policy_trial)
+    p.add_argument("account", help="postkassens interne navn; uden tilvalg vises status")
+    trial = p.add_mutually_exclusive_group()
+    trial.add_argument("--threshold", type=float, help="start parallel prøve uden mailændringer")
+    trial.add_argument("--stop", action="store_true", help="stop registreringen; aktive regler bevares")
     p = add("policy-preview", "afprøv gemte policy-input lokalt uden mailhandlinger", cmd_policy_preview)
     p.add_argument("account", help="postkassens interne navn")
     p.add_argument("--threshold", type=float, default=None, help="prøv en anden scoregrænse; gemmes ikke")
