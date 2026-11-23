@@ -85,6 +85,8 @@ def test_own_notification_is_never_scanned(eng, mail, monkeypatch):
     conn = eng._open_conn()
     conn.execute("INSERT INTO mail_outbox(kind, recipient, subject, message_id, status, created_at) "
                  "VALUES('alert', 'ole@bynet.example', 's', ?, 'sent', ?)", (own, int(time.time())))
+    eng.mailidentity.bind(conn, "*notification*", own.strip("<>"), notify_mail(own.strip("<>")))
+    conn.commit()
     conn.close()
     when = dt.datetime.fromtimestamp(h.t, dt.timezone.utc)
     h.client.add("INBOX", notify_mail(own.strip("<>")), internaldate=when)
@@ -262,3 +264,22 @@ def test_weekly_mail_runs_from_the_loop(eng, mail, monkeypatch):
     h.t = MONDAY_0730
     h.loop()
     assert len(outbox(eng, "weekly")) == 1
+
+
+def test_recorded_notification_id_does_not_exempt_different_content(eng, mail, monkeypatch):
+    h = Harness(eng, monkeypatch)
+    mail.ensure_schema()
+    own = mail.new_message_id()
+    raw = notify_mail(own.strip('<>'))
+    conn = eng._open_conn()
+    try:
+        conn.execute("INSERT INTO mail_outbox(kind, recipient, subject, message_id, status, created_at) "
+                     "VALUES('alert', 'owner@example.org', 's', ?, 'sent', ?)", (own, int(time.time())))
+        eng.mailidentity.bind(conn, '*notification*', own.strip('<>'), raw)
+        conn.commit()
+    finally:
+        conn.close()
+    h.client.add('INBOX', raw + b'\r\nDifferent malicious payload')
+    h.rspamd.default = 20
+    h.scan()
+    assert len(h.rspamd.scan_calls) == 1 and h.db.count_pending_moves() == 1

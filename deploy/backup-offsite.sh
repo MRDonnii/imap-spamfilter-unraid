@@ -211,8 +211,14 @@ restore_drill() {
               "/backup/$(basename "$DRILL_TMP")/$name" 2>&1)"; then
     first="$(grep -m1 '^OK: ' <<<"$out" || true)"
     if [[ -n "$first" ]]; then
-      write_drill true "$name" "${first:0:240}" "" || true
-      log "restore drill ok: $name"
+      if out="$(timeout 1800 docker exec -u 10099:10099 spamfilter sfctl backup-drill \
+                  "/backup/$(basename "$DRILL_TMP")/$name" 2>&1)" &&
+         jq -e '.ok == true and .app_started == true and .network == "unix_sockets_only"' >/dev/null 2>&1 <<<"$out"; then
+        write_drill true "$name" "OK: arkiv, SQLite, applikationsstart og Redis/Bayes kontrolleret isoleret" "" || true
+        log "restore drill ok: $name (app + Bayes started in isolated copy)"
+      else
+        drill_fail "$name" "sfctl backup-drill fejlede; arkivet var læsbart, men gendannet opstart er ikke bekræftet"
+      fi
     else
       drill_fail "$name" "sfctl backup-verify gav intet OK"
     fi

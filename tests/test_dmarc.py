@@ -360,7 +360,10 @@ def test_a_later_mail_reusing_a_report_message_id_is_scored_normally(eng, monkey
     h.deliver(report_mail(b"MZ evil", msgid="r1@google.com", filename="invoice.zip"))
     h.scan()
     assert len(h.rspamd.scan_calls) == 2
-    assert h.db.get_message("r1@google.com")["our_action"] in ("pending_move", "moved_to_junk")
+    assert h.db.conn.execute("SELECT COUNT(*) FROM messages m JOIN mail_identity i "
+                             "ON m.account=i.account AND m.message_id=i.message_key "
+                             "WHERE i.wire_id=? AND m.our_action IN ('pending_move', 'moved_to_junk')",
+                             ("r1@google.com",)).fetchone()[0] == 1
     assert not h.events("dmarc_report_kept")
 
 

@@ -1865,6 +1865,45 @@ def cmd_backup_restore(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_backup_drill(args):
+    import restorecheck
+    bk = _backup_mod()
+    path, key = _archive_path(bk, args.file), _ask_key(args, bk)
+    try:
+        result = restorecheck.run(path, key)
+    except (restorecheck.DrillError, bk.BackupError) as ex:
+        audit("backup_startup_drill", result="failed", detail=type(ex).__name__)
+        raise CliError(str(ex)) from None
+    audit("backup_startup_drill", detail="app and Redis started on isolated restored copy")
+    out(json.dumps(result, ensure_ascii=False))
+    return EXIT_OK
+
+
+def cmd_quality_evaluate(args):
+    import quality
+    try:
+        result = quality.evaluate(quality.read_dataset(Path(args.file)))
+    except (ValueError, OSError) as ex:
+        raise CliError("Evaluering afvist: " + str(ex)) from None
+    out(json.dumps(result, ensure_ascii=False, indent=2))
+    return EXIT_OK
+
+
+def cmd_quality_export(args):
+    import quality
+    with sqlite3.connect(ui.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        accounts = [r[0] for r in conn.execute("SELECT DISTINCT account FROM scan_observations")]
+        rows = list(quality.export_sample(conn, accounts))
+    # Never overwrite a file or print message IDs to the terminal.
+    fd = os.open(args.to, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    out(f"{len(rows)} mærkede observationer eksporteret lokalt. Udvalget har selektionsbias; del ikke filen på GitHub.")
+    return EXIT_OK
+
+
 def cmd_backup_key(args: argparse.Namespace) -> int:
     """show: vis nøglen (kun én gang), status: findes den, id og hvornår den blev vist."""
     bk = _backup_mod()
@@ -2317,10 +2356,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("push-test", "send en testbesked nu til alle en brugers enheder", cmd_push_test)
     p.add_argument("user", metavar="BRUGER", help="brugernavnet (se sfctl users)")
     add("push-reset", "nødstop: fjern alle enheder med beskeder og lav en ny nøgle (VAPID)", cmd_push_reset)
+    p = add("quality-evaluate", "evaluér et lokalt mærket holdout-sæt uden træning", cmd_quality_evaluate)
+    p.add_argument("file", help="lokal JSONL-fil; se CONFIGURATION.md")
+    p = add("quality-export", "eksportér eksplicitte brugerafgørelser lokalt (metadata, ingen mailtekst)", cmd_quality_export)
+    p.add_argument("--to", required=True, help="ny fil; oprettes med mode 0600")
     p = add("backup-now", "lav en krypteret backup nu (ellers hver nat fra kl. 02:30)", cmd_backup_now)
     p.add_argument("--if-older", type=float, default=None, metavar="TIMER",
                    help="kun hvis den seneste vellykkede backup er ældre end TIMER timer")
     add("backup-list", "vis de krypterede backups i /backup", cmd_backup_list)
+    p = add("backup-drill", "gendan midlertidigt og start app + Bayes isoleret uden mailarbejdere", cmd_backup_drill)
+    p.add_argument("file", metavar="FIL")
+    p.add_argument("--ask-key", action="store_true")
     p = add("backup-verify", "dekrypter en backup og tjek alle kontrolsummer (skriver intet)", cmd_backup_verify)
     p.add_argument("file", metavar="FIL", help="filnavnet fra sfctl backup-list (eller en sti)")
     p.add_argument("--ask-key", action="store_true", help="spørg efter nøglen (fra kode-manageren)")

@@ -3963,7 +3963,7 @@ def _bytes(n: Any) -> str:
 
 def _iso_ts(value: Any) -> int | None:
     """Docker's RFC 3339 StartedAt (nanoseconds, Z) -> unix seconds."""
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)?", str(value or ""))
     if not m:
@@ -4268,6 +4268,27 @@ def _audit_detail(r: dict) -> str:
     return d.replace("->", " → ") if arrow else d
 
 
+def _scan_coverage_card():
+    from datetime import datetime, timedelta
+    import quality
+    since = (datetime.now(kit.TZ) - timedelta(days=13)).strftime("%Y-%m-%d")
+    accounts = [a.name for a in ui.visible_accounts()]
+    items = quality.coverage(ui.db(), accounts, since)
+    rows = ""
+    for item in items:
+        cells = [h(ui.account_label(item["account"]))]
+        cells += [h(str(item["counts"][m]) if item['has_observations'] else 'Intet datagrundlag')
+                  for m in quality.METRICS]
+        rows += "<tr>" + "".join("<td>" + str(c) + "</td>" for c in cells) + "</tr>"
+    heads = ["Postkasse", *quality.METRICS.values()]
+    table = ('<div class="table-wrap"><table><thead><tr>' +
+             "".join("<th>" + str(h(x)) + "</th>" for x in heads) +
+             "</tr></thead><tbody>" + rows + "</tbody></table></div>")
+    return kit.card(table if rows else '<p class="muted">Intet datagrundlag endnu.</p>',
+                    title="Scanningens dækning – 14 dage",
+                    subtitle="Hændelser pr. postkasse. Fejlede forsøg kan senere lykkes; tallene er ikke en procent af al modtaget post.")
+
+
 @app.get("/system")
 @ui.admin_required
 def system_page():
@@ -4332,6 +4353,7 @@ def system_page():
         + _disk_card(hs) + _mail_drift_card()
         + kit.card(version, title="Version")
         + "</div>"
+        + _scan_coverage_card()
         + log_card)
     return _page("Drift", body, active="system", actions_html=restart,
                  subtitle="Containere, rspamd, DNS, backup og logs.")

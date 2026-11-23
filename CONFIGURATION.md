@@ -401,3 +401,29 @@ Siden **Filtrering → AI-vurdering** (`/ai`, kun administratorer). Ingen nøgle
 - **2.3.6 Home Assistant:** `GET /api/v1/ha` (kun hjemmenetværket + bearer-nøgle, ellers 404 for alle metoder). Nøglen oprettes under **Indstillinger → Home Assistant** eller med `sfctl ha-token`; kun dens sha256 gemmes (`settings_kv`). Se [HOME-ASSISTANT.md](HOME-ASSISTANT.md) og [SECURITY.md](SECURITY.md).
 - **2.11.0 API-nøgler:** flere navngivne nøgler til programmer under **Konti og adgang → Adgang for programmer** (eller `sfctl api-key`), gemt som sha256 i tabellen `ui_api_keys`. Den gamle Home Assistant-nøgle flyttes automatisk og virker videre. Login fra Kontrolrum (SSO) er flyttet til samme side.
 - **2.3 tillid:** `TH_KNOWN_CONTACT` (−4/−3/−2), `TH_KNOWN_DOMAIN` (−1), `TH_REPLY` (−5), `TH_REPLY_THREAD` (−2), `TH_REPLY_UNVERIFIED` (0), `TH_ESTABLISHED` (−2) og `TH_FIRST_CONTACT` (+1). Kun det stærkeste kontaktsignal tæller, og al tillid (inkl. `TH_NEWSLETTER`) er tilsammen højst −6. `SCORE_VERSION` er uændret.
+
+
+## Scanningdækning og lokal evaluering (2.15)
+
+**Drift → Scanningens dækning** viser 14 kalenderdages hændelser pr. postkasse: scannet, læst før første kontrol, for stor, fejlede forsøg og opgivet scanning. Et fejlet forsøg kan senere lykkes. Genscanninger, udbyderspam og læste mails har forskellige nævnere, så der vises ingen samlet scanningsprocent. Visningen er kun for administratorer og ændrer ingen mail eller træning.
+
+Første normale scanning gemmes i `scan_observations` med score, effektiv grænse, beslutning, filterversion og tidspunkt. Senere AI-vurderinger overskriver ikke observationen. Den nye evaluering måler derfor **første scanning før AI**, ikke kvaliteten af en AI-model eller dens confidence. AI-model og prompt indgår ikke i dette mål; sammenlign kun observationer med samme grundlag og versionsgruppe.
+
+Kør som ejer lokalt i containeren:
+
+```sh
+docker exec spamfilter sfctl quality-export --to /state/quality-sample.jsonl
+docker exec spamfilter sfctl quality-evaluate /state/quality-sample.jsonl
+```
+
+Eksporten indeholder kun scorer, versioner, interne mail-/konto-ID'er og eksplicitte brugerafgørelser, ingen mailtekst, emner eller adresser. ID'er kan stadig identificere personer: filen oprettes som 0600, en eksisterende fil overskrives ikke, og filen skal blive lokalt. Den kræver observationer fra efter opgraderingen. Automatisk Bayes-læring bruges ikke som facit.
+
+Hver linje er et JSON-objekt, eksempel:
+
+```json
+{"account":"mailbox-a","id":"sample-001","split":"holdout","label":"ham","score":2.0,"threshold":8.0,"prediction":"ham","version":"2.15.0"}
+```
+
+`label` er menneskets vurdering (`ham`/`spam`). `prediction` er filterbeslutningen inklusive regler; udelades den ved manuel import, bruges score >= threshold. Brug `split=train` for træningsmateriale og `split=holdout` for særskilt prøvemateriale. Identiske konto/ID-par, også på tværs af split, afvises. `train` tæller ikke med; værktøjet træner aldrig, kontakter ikke IMAP og flytter ingen mail. Maksimal inputfil er 10 MiB.
+
+Resultatet viser TP/TN/FP/FN, precision, recall, falsk-positiv-rate, falsk-negativ-rate og prøvestørrelse pr. postkasse. Manglende nævnere giver `null`. Eksport af brugerrettelser er et **skævt udvalgt prøveudvalg** og ikke dokumentation for samlet træfsikkerhed eller et uafhængigt holdout. For en reel før/efter-måling skal ejeren udtage og menneskeligt mærke et repræsentativt, på forhånd reserveret udvalg, holde det ude af al træning og bruge samme scorergrundlag. Familiepost er ikke testet eller uploadet med denne udgivelse.

@@ -1444,7 +1444,10 @@ def test_live_undo_with_learning_learns_ham_exactly_once(live, caps):
 @pytest.mark.parametrize("caps", [GIGA, SCAN], ids=["gigahost", "scannet"])
 def test_live_find_mail_is_read_only_and_move_back_sticks(live, caps):
     h = live_account(live, caps, extra_folders=("Uønsket e-mail", "Sent"))
-    catch_spam(live, h, ["order@x"])
+    live_mail(live, h, "INBOX", "order@x", subject="Ordre 1001", sender="support@vexar.example", score=13)
+    live_loop(live, h)
+    live.clock.t += 61
+    live_loop(live, h)
     # The provider sorted one into its Junk (engine records provider_junk),
     # the mail program put one into "Uønsket e-mail", one sits in Trash, and
     # a match in Sent must never be searched.
@@ -1458,8 +1461,6 @@ def test_live_find_mail_is_read_only_and_move_back_sticks(live, caps):
     live_loop(live, h)  # junk poll sees the provider's Junk
     assert live_row(h, "kontakt@x")["our_action"] == "provider_junk"
     h.db.conn.execute("UPDATE messages SET subject='Ordre vexar.example' WHERE message_id='order@x'")
-    sf = h.box.folders["Spamfilter"].msgs
-    sf[max(sf)].raw = make_message("order@x", subject="Ordre 1001", sender="support@vexar.example")
     h.box.writes.clear()
     # 2.3: the engine's own contact sync EXAMINEs Sent (known contacts);
     # only the calls find_mail makes count here.
@@ -1924,3 +1925,25 @@ def test_spamexperts_tip_needs_scannet_and_a_spamexperts_mx(tmp_path, monkeypatc
     assert not mailcheck.spamexperts_in_front(sqlite3.connect(":memory:"), "not a domain")
     assert services._find_hints(acc, 30) == services._find_hints(acc, 30, spamexperts=False)
     assert any("SpamExperts" in x for x in services._find_hints(acc, 30, spamexperts=True))
+
+
+@pytest.mark.parametrize("caps", [GIGA, SCAN], ids=["gigahost", "scannet"])
+@pytest.mark.parametrize("wire", [None, "reused@x"], ids=["missing-id", "collision"])
+def test_live_find_and_release_uses_content_identity(live, caps, wire):
+    h = live_account(live, caps)
+    if wire:
+        live_mail(live, h, "INBOX", wire, subject="Original", score=0)
+        live_loop(live, h)
+    live_mail(live, h, "Trash", wire, subject="Find marker.example", sender="sender@marker.example")
+    res = services.find_mail("anna", "marker.example", since_days=7, engine=live.eng)
+    assert res["ok"]
+    hit = next(g for g in res["folders"] if g["name"] == "Trash")["hits"][0]
+    key = hit["message_id"]
+    assert key.startswith("sf-local:") and hit["can_move"]
+    out = services.move_found_to_inbox("anna", "Trash", key, "admin", engine=live.eng)
+    assert out["ok"], out
+    assert live_row(h, key)["user_verdict"] == "ham"
+    scans = len(live.rspamd.scan_calls)
+    live_loop(live, h, n=3, step=400)
+    assert len(live.rspamd.scan_calls) == scans
+    assert live.rspamd.learn_calls == []

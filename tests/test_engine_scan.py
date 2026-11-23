@@ -145,16 +145,16 @@ def test_seen_at_first_sight_is_skipped(eng, monkeypatch):
     assert h.bookmark() == 2
 
 
-def test_no_message_id_and_oversize_are_skipped(eng, monkeypatch):
+def test_no_message_id_is_scanned_and_oversize_is_skipped(eng, monkeypatch):
     h = Harness(eng, monkeypatch)
     h.client.add("INBOX", make_message(None))
     h.client.add("INBOX", make_message("big@x"), size=eng.MAX_FETCH_BYTES + 1)
     h.scan()
-    assert h.rspamd.scan_calls == []
-    assert h.stat("skipped_no_msgid") == 1 and h.stat("skipped_oversize") == 1
+    assert len(h.rspamd.scan_calls) == 1
+    assert h.stat("skipped_no_msgid") == 0 and h.stat("skipped_oversize") == 1
     assert h.bookmark() == 2
-    # The oversize body was never fetched.
-    assert not any(c[0] == "fetch" and b"BODY.PEEK[]" in c[2] for c in h.client.calls)
+    # Only the small ID-less mail is fetched; the oversize UID stays untouched.
+    assert all(2 not in c[1] for c in h.client.calls if c[0] == "fetch" and b"BODY.PEEK[]" in c[2])
 
 
 def test_scan_retry_gives_up_after_five_attempts(eng, monkeypatch):
@@ -576,7 +576,7 @@ def test_admin_release_with_stale_folder_keeps_manual_release(eng, monkeypatch):
     assert r["our_action"] == "manual_release" and r["current_folder"] == "INBOX"
 
 
-def test_user_verdict_ham_blocks_moves_even_if_rescored(eng, monkeypatch):
+def test_legacy_header_only_ham_does_not_exempt_new_delivery(eng, monkeypatch):
     h = Harness(eng, monkeypatch, mode="move")
     with h.db.tx():
         h.db.upsert_message("v@x", "INBOX", "s", "x")
@@ -585,7 +585,8 @@ def test_user_verdict_ham_blocks_moves_even_if_rescored(eng, monkeypatch):
     h.scan()
     h.advance(61)
     h.moves()
-    assert h.client.msgids("INBOX") == ["v@x"] and h.db.count_pending_moves() == 0
+    # An old header-only verdict cannot establish that this is the same body.
+    assert h.client.msgids("Junk") == ["v@x"] and h.db.count_pending_moves() == 0
 
 
 def test_pending_move_dropped_if_verdict_arrives_during_grace(eng, monkeypatch):

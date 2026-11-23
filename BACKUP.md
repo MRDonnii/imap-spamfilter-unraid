@@ -146,3 +146,18 @@ Prøv det i hånden som root: `deploy/backup-offsite.sh --dry-run` viser, hvilke
 - Ved rollback til 2.0.3 får Brugere igen alle tre rettigheder, og to-trins-login slås fra. Det er sådan 2.0 virkede.
 
 Gendannelse på en anden maskine kræver de samme container-digests og kildetræet under `source/`. Hvis host-IP eller DNS er anderledes, skal WebUI-bindingen og Unbound-forwarderen tilpasses. Der er ikke lavet en destruktiv gendannelse på live-data. Dette dokument er en runbook.
+
+
+## Gendannet opstart af app og Bayes (2.15)
+
+Arkivverifikation og opstart er forskellige prøver. Den månedlige off-site-kontrol i den opdaterede `deploy/backup-offsite.sh` downloader fortsat arkivet og kontrollerer det. Den kører derefter `sfctl backup-drill`: dekryptering til en ny privat, midlertidig mappe, SQLite `quick_check`, indlæsning af den gendannede Redis RDB og HTTP-opstart af appen med den gendannede database. Status godkendes først efter begge trin. Et gammelt positivt resultat fra før 2.15 dokumenterer kun arkivkontrol. Allerede installerede Unraid User Scripts skal opdateres efter den normale installationsvej for at få scriptændringen med.
+
+Manuel prøve i all-in-one-containeren, med et eksisterende krypteret arkiv:
+
+```sh
+docker exec spamfilter sfctl backup-drill /backup/spamfilter-YYYYMMDDTHHMMSSZ.sfbak
+```
+
+Brug arkivets faktiske navn; `--ask-key` spørger interaktivt efter en anden backupnøgle. Nøglen må ikke indgå i kommandolinjen. Prøven kræver både `spamfilter.db` og Redis/Bayes-dumpen. Den oprindelige installation og arkivet ændres ikke. Midlertidige processer stoppes og filerne slettes efter prøven. Der bruges ingen aktive konti eller mail-, SMTP-, trænings- eller push-arbejdere; Redis og HTTP lytter kun på private Unix-sockets. App-processen afviser udgående IP-forbindelser.
+
+Dette bekræfter, at SQLite, applikationen og Redis-data kan indlæses. Det er ikke en fuld gendannelse af udbyderadgang, Rspamd/Bayes-scoring eller ClamAV-signaturer. Containerens særskilte `smoke-test.sh --learn-test` kontrollerer også rigtig Rspamd-scanning, læring og data efter genstart og udfører herefter denne backup/opstart-prøve på den tomme testinstallation. Mailudbydere og live-installation skal fortsat kontrolleres ved ejerens installation. En tom Bayes-base er tilladt ved manuel prøve; JSON-resultatet viser `redis_keys`.

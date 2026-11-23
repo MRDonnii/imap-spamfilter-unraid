@@ -1,6 +1,6 @@
-# Spamfilter til Unraid (version 2.4.0)
+# Spamfilter til Unraid (version 2.15.0)
 
-Et selvhostet spamfilter til familiens og firmaets postkasser. Fra 2.4 kører det i **én Docker-container**, `spamfilter`, på en Unraid-server. Postkasserne bliver hos deres udbydere (fx Gigahost eller Scannet, som filteret kender særligt godt). Filteret logger ind via krypteret IMAP, vurderer hver ny mail i indbakken og flytter spam over i mappen **Spamfilter** i samme postkasse.
+Et selvhostet spamfilter til familiens og firmaets postkasser. Fra 2.4 kører det i **én Docker-container**, `spamfilter`, på en Unraid-server. Postkasserne bliver hos deres udbydere (fx Gigahost eller Scannet, som filteret kender særligt godt). Filteret logger ind via krypteret IMAP, vurderer nye ulæste mails inden for størrelsesgrænsen i indbakken og flytter spam over i mappen **Spamfilter** i samme postkasse.
 
 Projektet bygger på [marcelverdult/imap-spamfilter](https://github.com/marcelverdult/imap-spamfilter). Den oprindelige README ligger i [UPSTREAM-README.md](UPSTREAM-README.md).
 
@@ -9,13 +9,21 @@ Projektet bygger på [marcelverdult/imap-spamfilter](https://github.com/marcelve
 - **Intet bliver slettet.** Filteret flytter kun mails mellem Indbakken og mappen `Spamfilter`. Du kan altid flytte en mail tilbage. Oprydning i `Spamfilter` gør du selv i dit mailprogram.
 - **Udbydernes egne spamfiltre kører videre.** Filteret lægger aldrig selv noget i udbydernes spam-mapper (`Junk` o.l.) og flytter kun noget ud af dem, når du trykker **Frigiv** eller **Flyt til indbakken**. Ellers læser det dem bare, så det kan finde mails og se, hvad du selv flytter.
 - **Det lærer af dig.** Trækker du en mail ind i `Spamfilter` i mailprogrammet (også på mobilen), lærer filteret, at den er spam. Trækker du den ud igen, lærer det, at den ikke er spam. Samtidig bliver afsenderen tilladt for den postkasse (det kan slås fra pr. konto).
-- **Ordrer og kundepost går altid igennem.** Afsendere med "Altid igennem", fx webshop-platformen, bliver aldrig flyttet, når mailen kan bekræftes som ægte. Mails til beskyttede kontaktadresser skal have en langt højere score, før de flyttes.
+- **Beskyttelse af ordrer og kundepost.** Afsendere med "Altid igennem", fx webshop-platformen, bliver aldrig flyttet, når mailen kan bekræftes som ægte. Mails til beskyttede kontaktadresser skal have en langt højere score, før de flyttes.
 - **Ingen åbne porte.** MX og SMTP er uændret. WebUI'en svarer kun på det lokale netværk, medmindre du bevidst sætter en Cloudflare Tunnel op ([CLOUDFLARE-TUNNEL.md](CLOUDFLARE-TUNNEL.md)).
 - **Folk, du har skrevet til, kommer igennem.** Fra 2.3 lærer filteret af dine sendte mails, hvem du skriver med. Svar på dine egne mails og post fra kendte kontakter og faste afsendere får et forspring. Filteret læser kun modtageradresser og Message-ID i Sendt, aldrig indholdet.
-- **Trusler går aldrig igennem.** Virus, links til phishing- og malware-sider og farlige vedhæftninger (fx `.exe`, også inde i zip-filer) flyttes til Spamfilter uanset score og regler. Kun en administrator kan frigive dem.
+- **Registrerede trusler får forrang.** Registrerede virus, phishing og farlige vedhæftninger behandles efter trusselspolitikken. Virus kan ikke tillades med en afsenderregel. Visse andre trusler har snævre, bekræftede administratorundtagelser. Kun en administrator kan frigive farlige mails.
 - **Genscanning.** Mails, filteret var i tvivl om, bliver scannet igen efter 45 minutter, 4 timer og 24 timer. Er de i mellemtiden kommet på en sortliste, flyttes de, hvis de stadig er ulæste.
 - **Mail fra filteret.** Med en mailserver sat op under Indstillinger kan filteret sende alarmer, opsummeringer, ugerapport og koder til to-trins-login som almindelig mail.
 - **Indbyggede sikringer.** Flytter filteret pludselig usædvanligt meget, stopper det sig selv (sikkerhedsbremsen). Efter en opdatering flytter det kun tydelig spam i 30 minutter.
+
+## Dækning og begrænsninger
+
+Filteret arbejder **efter IMAP-levering**. En mail kan derfor nå indbakken og udløse en telefonnotifikation før en flytning. Mails, der allerede er læst ved første kontrol, og mails over størrelsesgrænsen springes over. ClamAV-nedetid stopper ikke den øvrige scanning: virustjekket kan være utilgængeligt. Ingen spam- eller virusscanner finder alle trusler.
+
+Fra 2.15 scannes også mails uden Message-ID. Frigivelser knyttes til et lokalt indholdsfingerprint, så en ny mail ikke overtager en anden mails afgørelse ved at genbruge dens ID. Almindelige tilladelser tilføjet i ventetiden kontrolleres igen før flytning, med afsender- og trusselskontrol bevaret.
+
+**Drift** viser scanningstællere pr. postkasse over 14 dage. Lokal evaluering af menneskeligt mærkede prøveudvalg og en særskilt gendannet opstart af app + Redis/Bayes findes i [CONFIGURATION.md](CONFIGURATION.md) og [BACKUP.md](BACKUP.md). Tallene dokumenterer ikke familiens samlede træfsikkerhed.
 
 ## Mailudbydere
 

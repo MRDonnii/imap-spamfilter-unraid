@@ -29,6 +29,7 @@ import os
 import re
 import socket
 import sqlite3
+import mailidentity
 import ssl
 import time
 from contextlib import closing
@@ -598,6 +599,11 @@ def _record_verdict(db: Any, eng: Any, acc: Any, mid: str, *, folder: str, verdi
         except Exception:
             pass
     with db.tx():
+        if raw is not None and hasattr(eng, "normalize_message_id"):
+            # The real engine has the additive identity table. Fake engines
+            # used by old versions may expose only the original interface.
+            if db.conn.execute("SELECT 1 FROM sqlite_master WHERE name='mail_identity'").fetchone():
+                mailidentity.bind(db.conn, acc.name, eng.parse_envelope(raw)[0], raw)
         db.conn.execute(
             """
             INSERT INTO messages(account, message_id, first_seen, last_seen,
@@ -656,6 +662,8 @@ def _do_release(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, Any
         return _res(mid, False, "ambiguous", "Flere beskeder har samme Message-ID – intet er ændret.")
     uid = uids[0]
     raw, flags = _fetch_body(sess.client, uid, eng.MAX_FETCH_BYTES)
+    if hasattr(eng, 'mailidentity') and not _bind_selected(eng, db, acc, mid, raw):
+        return _res(mid, False, "identity_changed", "Beskeden kunne ikke identificeres sikkert. Søg igen.")
     if folder == fmap["inbox"]:
         # Already in the inbox (shadow/flag mode): drop our $Junk mark only
         # if the filter set one, so shadow mode stays write-free.
@@ -2020,6 +2028,21 @@ def find_mail(account: str, text: str, since_days: int = 30, folders: Iterable[s
                 if newest:
                     data = client.fetch(newest, [b"ENVELOPE", b"INTERNALDATE", b"FLAGS"])
                     group["hits"] = [_envelope_hit(u, data[u]) for u in newest if u in data]
+                    if hasattr(eng, 'mailidentity'):
+                        with closing(_open_db(eng)) as conn:
+                            for hit in group['hits']:
+                                raw, _flags = _fetch_body(client, hit['uid'], eng.MAX_FETCH_BYTES)
+                                if raw is None:
+                                    hit['message_id'] = None
+                                    continue
+                                wire = eng.parse_envelope(raw)[0]
+                                legacy = bool(wire and conn.execute(
+                                    'SELECT 1 FROM messages WHERE account=? AND message_id=?',
+                                    (acc.name, wire)).fetchone()
+                                    and mailidentity.binding(conn, acc.name, wire) is None)
+                                hit['message_id'] = mailidentity.bind(conn, acc.name, wire, raw,
+                                                                     legacy_exists=legacy)
+                            conn.commit()
             except Exception as ex:
                 log.info("find_mail in %s failed: %s", t["name"], type(ex).__name__)
                 out["errors"].append({"folder": t["name"], "label": t["label"],
@@ -2187,6 +2210,15 @@ def _after_learn(db: Any, acc: Any, mid: str, outcome: str) -> None:
                 "WHERE account=? AND message_id=?", (now, acc.name, mid))
 
 
+def _bind_selected(eng: Any, db: Any, acc: Any, mid: str, raw: bytes | None) -> bool:
+    """Bind the explicit selection before an inbox worker can observe its move."""
+    if raw is None:
+        return False
+    wire = eng.parse_envelope(raw)[0]
+    with db.tx():
+        return mailidentity.bind(db.conn, acc.name, wire, raw) == mid
+
+
 def _move_one_to_inbox(eng: Any, db: Any, acc: Any, client: Any, fmap: dict[str, Any],
                        caps: frozenset, folder: str, uid: int, mid: str, *, learn: bool,
                        verdict: str | None, by: str, actor: str, event: str, detail: str,
@@ -2206,8 +2238,10 @@ def _move_one_to_inbox(eng: Any, db: Any, acc: Any, client: Any, fmap: dict[str,
     except Exception:
         pass
     raw = None
-    if learn:
+    if learn or hasattr(eng, 'mailidentity'):
         raw, _f = _fetch_body(client, uid, eng.MAX_FETCH_BYTES)
+    if hasattr(eng, 'mailidentity') and not _bind_selected(eng, db, acc, mid, raw):
+        return False, "identity_changed", None
     snapshot = _premark_inbox(db, acc, mid, inbox=fmap["inbox"], verdict=verdict, by=by,
                               sender=sender, subject=subject,
                               received_at=_ts(meta.get(b"INTERNALDATE")))

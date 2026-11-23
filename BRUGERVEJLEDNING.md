@@ -837,3 +837,10 @@ docker exec -it spamfilter sfctl <kommando>
 | Udefra siger login hele tiden "Siden var udløbet", eller en side siger "Sikkerhedstokenet passede ikke" | Skriv adressen under **Indstillinger → Adgang udefra → Ekstern adresse**. Den skal være præcis den adresse, du åbner, med `https://`. Tjek også, at TRUSTED_PROXIES er sat. Se [CLOUDFLARE-TUNNEL.md](CLOUDFLARE-TUNNEL.md). |
 
 Kommer du ikke videre, så kig i **Drift → Ændringslog**. Alle administrative handlinger står i revisionsloggen.
+
+
+## Kontrol af dækning (2.15)
+
+Administrator kan under **Drift** se, hvor mange scanninger, læste/store mails og fejlede forsøg der er registreret pr. postkasse de seneste 14 dage. Det er hændelsestal og ikke en procent for, hvor god filtreringen er. Filteret arbejder efter mailens levering, så en telefon kan nå at vise en notifikation. Ingen scanning finder alle trusler; allerede læst post, størrelsesgrænsen og et utilgængeligt virustjek begrænser dækningen.
+
+Mails uden Message-ID bliver nu også scannet. Filteret husker frigivelsen af den konkrete mail ud fra dens indhold. En ny mail med samme ID, men andet indhold, vurderes selvstændigt. En almindelig tilladelse tilføjet under ventetiden kan aflyse flytningen, når afsender- og trusselskontrollen tillader det.

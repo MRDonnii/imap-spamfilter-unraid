@@ -83,7 +83,7 @@ def test_dependabot_covers_pip_docker_and_actions():
 
 def test_pins_and_clamav_minimum():
     v = _versions()
-    assert v["VERSION"] == "2.14.2" and v["AIO_IMAGE"].endswith(":2.14.2")
+    assert v["VERSION"] == "2.15.0" and v["AIO_IMAGE"].endswith(":2.15.0")
     assert v["REDIS_AIO_TAG"] == "8.10.3-trixie" and v["AIO_REDIS_VERSION"] == "8.10.3"
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", v["REDIS_AIO_DIGEST"])
     assert v["AIO_CLAMAV_MIN"] == "1.4.6"
@@ -522,9 +522,9 @@ def _drill(offsite):
 
 
 def test_restore_drill_fetches_the_newest_remote_archive_and_verifies_it(offsite):
-    write_state(offsite.state_file, {"spamfilter": _container("imap-spamfilter-unraid:2.14.2")})
+    write_state(offsite.state_file, {"spamfilter": _container("imap-spamfilter-unraid:2.15.0")})
     proc = _offsite(offsite, **_drill_env(offsite, FAKE_DOCKER_EXEC=json.dumps(
-        {"spamfilter sfctl backup-verify": VERIFY_OK})))
+        {"spamfilter sfctl backup-verify": VERIFY_OK, "spamfilter sfctl backup-drill": json.dumps({"ok": True, "app_started": True, "network": "unix_sockets_only"})})))
     assert proc.returncode == 0, proc.stdout + proc.stderr
     calls = (offsite.tmp / "rclone.log").read_text().splitlines()
     cp = next(c for c in calls if c.startswith("copyto "))
@@ -576,7 +576,7 @@ def _monitor_alerts(host, **extra):
     (host.app / "state" / "heartbeat").write_text(f"{int(time.time()) - 10} boot\n")
     (host.app / "state" / "backup-status.json").write_text(json.dumps(
         {"ok": True, "ts": int(time.time()) - 3600, "archive": "/x", "size": 1, "error": None}))
-    _monitor(host, FAKE_CURL_BODY=json.dumps({"ok": True, "version": "2.14.2", "accounts": {"bynet": "idle"}}),
+    _monitor(host, FAKE_CURL_BODY=json.dumps({"ok": True, "version": "2.15.0", "accounts": {"bynet": "idle"}}),
              FAKE_DOCKER_EXEC=json.dumps({"spamfilter-unbound drill": DRILL_OK, "spamfilter-rspamd rspamc": "ok"}),
              **extra)
     st = json.loads((host.app / "state" / "host-status.json").read_text())
