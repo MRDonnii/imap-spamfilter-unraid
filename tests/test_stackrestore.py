@@ -86,7 +86,7 @@ def test_refuses_live_path_and_removes_its_own_failed_copy(bk, archive, tmp_path
     assert not output.exists()
 
 
-@pytest.mark.parametrize('unsafe', ['network', 'port', 'mount', 'memory'])
+@pytest.mark.parametrize('unsafe', ['network', 'port', 'mount', 'memory', 'disk'])
 def test_driver_refuses_daemon_isolation_changes_before_start(tmp_path, unsafe):
     """A daemon-applied mismatch must never reach docker start (real jq gate)."""
     import os
@@ -129,6 +129,10 @@ elif args[0] == 'inspect':
         p = binaries / name
         p.write_text(body)
         p.chmod(0o755)
+    if unsafe == 'disk':
+        p = binaries / 'df'
+        p.write_text('#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted\\n/dev/test 100 100 0 100%% /test\\n"\n')
+        p.chmod(0o755)
     source = tmp_path / 'original.sfbak'
     key = tmp_path / 'original.key'
     source.write_bytes(b'encrypted synthetic archive')
@@ -145,10 +149,14 @@ elif args[0] == 'inspect':
         env=dict(os.environ, PATH=str(binaries)+':'+os.environ['PATH'], SPAMFILTER_APP=str(app),
                  CALLS=str(calls), UNSAFE=unsafe), capture_output=True, text=True)
     assert result.returncode != 0
-    assert 'isolation verification failed' in result.stderr
     actions = [json.loads(line) for line in calls.read_text().splitlines()]
     assert not any(row[0] == 'start' for row in actions)
-    assert ['rm', '--force', '--volumes', 'owned-container-id'] in actions
+    if unsafe == 'disk':
+        assert 'Not enough free space' in result.stderr
+        assert not any(row[0] == 'create' for row in actions)
+    else:
+        assert 'isolation verification failed' in result.stderr
+        assert ['rm', '--force', '--volumes', 'owned-container-id'] in actions
     assert not list((app / 'operations/restore-drills').iterdir())
     assert source.read_bytes() == b'encrypted synthetic archive'
     assert key.read_text() == 'neutral key'

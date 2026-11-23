@@ -184,9 +184,9 @@ Scriptenes indhold kopieres direkte ind i User Scripts, så de kører ikke fra a
 | Kun rspamds linjer | `docker logs --since 1h spamfilter 2>&1 \| grep '^\[rspamd\]'` |
 | Lytter kun WebUI'en udadtil? | `docker exec spamfilter sf-health listeners` |
 
-## 2.15.0 beta: installation og kontrol
+## 2.16.0 beta: installation og kontrol
 
-Denne udgivelse leveres som signeret kildepakke til den eksisterende WebUI-opdatering. Vælg **System → Opdateringer → Beta**, kontroller version 2.15.0 og brug **Opdatér nu**, når du vil installere. Værtshjælperen verificerer pakken og bygger containeren lokalt som beskrevet ovenfor. Der publiceres ikke et nyt GHCR-image i denne kildebaserede udgivelse; CI bygger og prøver begge images, og all-in-one-prøven bruger en tom testinstallation.
+Denne udgivelse leveres som signeret kildepakke til den eksisterende WebUI-opdatering. Vælg **System → Opdateringer → Beta**, kontroller version 2.16.0 og brug **Opdatér nu**, når du vil installere. Værtshjælperen verificerer pakken og bygger containeren lokalt som beskrevet ovenfor. Der publiceres ikke et nyt GHCR-image i denne kildebaserede udgivelse; CI bygger og prøver begge images, og all-in-one-prøven bruger en tom testinstallation.
 
 Tag en aktuel backup før installation. Efter opdateringen: kontroller versionsnummer, `sfctl doctor`, kontoernes forbindelser og **Drift → Scanningens dækning**. Dækningstabellen kræver nye hændelser; gamle brugerrettelser uden en ny første-scanningsobservation kan ikke indgå i den nye evaluering. En ældre frigivelse uden indholdsfingerprint kan kræve genfrigivelse, hvis mailen leveres til indbakken på ny.
 
@@ -194,3 +194,21 @@ Den eksisterende opdateringsmekanisme bevarer det tidligere image og kildebackup
 
 
 **Ældre beskeder:** Hvis en handling på en gammel post siger, at mailen ikke findes, brug **Find en mail** på afsender/emne og vælg den konkrete kopi. Gamle ID'er uden indholdsbinding bruges ikke til at genfinde post til læring eller reparation. Dette kan også efterlade gamle afbrudte kopiflytninger til manuel kontrol. Eksisterende virusmarkeringer mister ikke administratorkravet ved denne genfinding.
+
+
+**Nyt i 2.16:** Sammenligning/reservation af lokale prøver, beslutningsspor,
+read-only grænsepreview, parallel kandidatgrænse pr. konto, AI-proveniens,
+rettelse af forsinkede AI-grænser og historiske forklaringer. Drift viser
+antivirus/alder og ventende arbejde; manglende målinger er ukendte. Ingen
+kandidat aktiveres automatisk, og ingen ny familietræfsikkerhed er målt.
+
+Den separate gendannelsesprøve startes bevidst på værten med
+`deploy/aio/restore-stack-drill.sh`, som beskrevet i BACKUP.md. Den bruger en
+privat kontoløs kopi uden netværk eller publicerede porte. App/Rspamd/Redis/
+Unbound kontrolleres; ClamAV-signaturer og udbyderlogin er undtaget. Den
+månedlige eksisterende app/Redis-prøve erstattes ikke automatisk.
+
+Ved rollback til kode før 2.16 håndhæves hverken de nye læringsreservationer
+eller rettelsen af forsinkede AI-grænser. De additive tabeller kan blive
+liggende, men gamle programmer kan lære af reserveret materiale. Gem derfor
+vurderingsgrundlaget separat, og planlæg rollback bevidst.

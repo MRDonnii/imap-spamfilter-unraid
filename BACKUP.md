@@ -162,7 +162,7 @@ Brug arkivets faktiske navn; `--ask-key` spørger interaktivt efter en anden bac
 
 Dette bekræfter, at SQLite, applikationen og Redis-data kan indlæses. Det er ikke en fuld gendannelse af udbyderadgang, Rspamd/Bayes-scoring eller ClamAV-signaturer. Containerens særskilte `smoke-test.sh --learn-test` kontrollerer også rigtig Rspamd-scanning, læring og data efter genstart og udfører herefter denne backup/opstart-prøve på den tomme testinstallation. Mailudbydere og live-installation skal fortsat kontrolleres ved ejerens installation. En tom Bayes-base er tilladt ved manuel prøve; JSON-resultatet viser `redis_keys`.
 
-### Ressourcegrænser i opstartsprøven (under udvikling)
+### Ressourcegrænser i opstartsprøven (2.16)
 
 De to prøve-underprocesser (Redis og HTTP-appen) får hver højst 1024 MiB
 **virtuelt adresserum**, 30 CPU-sekunder og 128 åbne filer. Core dumps er slået
@@ -188,7 +188,7 @@ integritetskontrol kører fortsat i den kaldende proces under containerens
 almindelige grænser. Der oprettes ingen ny container/cgroup. Rspamd, ClamAV,
 eksterne tjenester og login på mailudbyderen er stadig uden for denne prøve.
 
-### Separat offlineprøve af den gendannede AIO-stak (under udvikling)
+### Separat offlineprøve af den gendannede AIO-stak (2.16)
 
 Kør fra kildetræet på Docker-værten som root, med et lokalt bygget AIO-billede
 som indeholder `stackrestore.py`:
@@ -199,7 +199,7 @@ deploy/aio/restore-stack-drill.sh --archive /sti/backup.sfbak \
 ```
 
 Nøglen læses fra en fil; selve nøgleværdien må ikke stå i kommandoen. Scriptet
-ændrer ikke den oprindelige nøgle, backup eller kørende containere. Det opretter
+ændrer ikke den oprindelige nøgle, backup eller kørende containere. Det kontrollerer fri diskplads før inputkopiering og igen før udpakning. Det opretter
 sin egen private mappe under `operations/restore-drills`, dekrypterer kopien og
 kontrollerer SQLite. Alle konti, ventende job, IMAP-/SMTP-hemmeligheder,
 udbakke, push-abonnementer og AI-indstillinger fjernes eller deaktiveres i

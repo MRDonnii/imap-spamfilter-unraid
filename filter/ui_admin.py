@@ -4059,6 +4059,52 @@ def _backup_card(hs: dict) -> str:
     return kit.card(kit.kv_list(pairs) + extra, title="Backup", subtitle="Kører hver nat kl. 03:00.")
 
 
+def _work_health_card() -> str:
+    """Cached antivirus facts and queue metadata; never run network probes."""
+    import opsview
+    import ai_verdict
+    import aio_health
+
+    now = time.time()
+    facts = opsview.antivirus(aio_health.read_status(), now=now)
+    state = facts['state']
+    text, tone = {
+        'unknown': ('Ukendt – ingen frisk måling', 'warn'),
+        'ok': ('Virker', 'ok'), 'waiting': ('Venter på virusdefinitioner', 'warn'),
+        'down': ('Svarer ikke – mail scannes uden virustjek', 'bad'),
+        'stale': ('Virusdefinitionerne er for gamle', 'bad'),
+        'off': ('Slået fra i opsætningen' if facts.get('intentionally_off') else 'Slået fra ved en fejl',
+                'neutral' if facts.get('intentionally_off') else 'bad'),
+    }[state]
+    pairs = [('Antivirus', kit.badge(text, tone))]
+    pairs.append(('Virusdefinitionernes alder', h(_age_text(facts['signatures_age_s']))
+                  if facts.get('signatures_age_s') is not None else 'Ukendt'))
+    if facts.get('observed_age_s') is not None:
+        pairs.append(('Antivirus målt', h(_age_text(facts['observed_age_s'])) + ' siden'))
+    queues = opsview.queues(ui.db(), [a.name for a in ui.effective_accounts()], now=now)
+    for kind, label in (('moves', 'Planlagte flytninger'), ('training', 'Træningsjob'), ('undo', 'Fortrydelsesjob')):
+        row = queues[kind]
+        if not row['available']:
+            value = 'Ukendt'
+        elif not row['count']:
+            value = 'Ingen ventende'
+        else:
+            value = f"{row['count']} ventende · ældste " + (
+                _age_text(row['oldest_age_s']) if row['oldest_age_s'] is not None else 'ukendt alder')
+        pairs.append((label, h(value)))
+    ai = ai_verdict.queue_status(now=now)
+    age = _age_text(ai['oldest_age_s']) if ai['oldest_age_s'] is not None else 'ukendt alder'
+    pairs.append(('AI-kø', h(f"{ai['count']} ventende · ældste {age}" if ai['count'] else 'Ingen ventende')))
+    links = (kit.button('Postkasser', href='/accounts', kind='ghost', size='sm')
+             + kit.button('AI-status', href='/ai', kind='ghost', size='sm')
+             + kit.button('Træning', href='/training', kind='ghost', size='sm'))
+    return kit.card(kit.kv_list(pairs)
+                    + '<p class="faint small">Ventetid kan være planlagt eller skyldes en pause. '
+                      'Køtal er ikke fejlmeldinger. AI-køen viser kun job, der endnu ikke behandles.</p>'
+                    + '<div class="form-actions">' + links + '</div>',
+                    title='Antivirus og ventende arbejde', subtitle='Seneste måling og aktuelt øjebliksbillede.')
+
+
 def _crypt_backup_card() -> str:
     """2.6 (B3): the nightly encrypted backup + off-site copy (ui_backup.py)."""
     try:
@@ -4352,7 +4398,7 @@ def system_page():
         + _containers_card(hs) + rspamd_card
         + _dns_card(hs) + _backup_card(hs)
         + _crypt_backup_card()
-        + _disk_card(hs) + _mail_drift_card()
+        + _disk_card(hs) + _mail_drift_card() + _work_health_card()
         + kit.card(version, title="Version")
         + "</div>"
         + _scan_coverage_card()

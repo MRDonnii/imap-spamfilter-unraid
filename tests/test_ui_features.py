@@ -643,3 +643,29 @@ def test_bruger_explanation_never_claims_an_unrecorded_score_threshold():
     reasons = ui_mail.why_reasons(dict(our_action='none', rule_hit=None, symbols='[]'))
     assert not any('over grænsen' in r for r in reasons)
     assert any('ikke markeret' in r for r in reasons)
+
+
+def test_drift_exposes_fresh_antivirus_and_waiting_metadata_only_to_admin(env, monkeypatch):
+    import aio_health
+    import ai_verdict
+    now = int(time.time())
+    monkeypatch.setattr(aio_health, 'read_status', lambda: {'ts': now,
+        'parts': {'clamav': {'state': 'stale', 'db_age_s': 4*86400}}})
+    monkeypatch.setattr(ai_verdict, 'queue_status', lambda **kw: dict(count=2, oldest_age_s=180))
+    html = body(client_for(env, 'admin').get('/system'))
+    assert 'Antivirus og ventende arbejde' in html
+    assert 'Virusdefinitionerne er for gamle' in html
+    assert '2 ventende' in html
+    assert 'Køtal er ikke fejlmeldinger' in html
+    csp_clean(html, '/system')
+    denied = client_for(env, 'anna').get('/system')
+    assert denied.status_code == 403
+    assert 'Virusdefinitionerne er for gamle' not in body(denied)
+
+
+def test_drift_never_presents_stale_antivirus_health_as_working(env, monkeypatch):
+    import aio_health
+    monkeypatch.setattr(aio_health, 'read_status', lambda: {'ts': int(time.time())-601,
+        'parts': {'clamav': {'state': 'ok', 'db_age_s': 100}}})
+    html = body(client_for(env, 'admin').get('/system'))
+    assert 'Ukendt – ingen frisk måling' in html

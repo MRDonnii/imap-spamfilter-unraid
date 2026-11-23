@@ -26,7 +26,7 @@ SF_SITE_ENV=/dev/null
 # shellcheck source=deploy/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 sf_require_root
-sf_require_cmds docker jq timeout realpath find mktemp cp chown chmod grep
+sf_require_cmds docker jq timeout realpath find mktemp cp chown chmod grep stat df awk
 [[ -f "$archive" && ! -L "$archive" && -f "$keyfile" && ! -L "$keyfile" ]] || die 'Archive and key must be regular files'
 archive="$(realpath "$archive")"; keyfile="$(realpath "$keyfile")"
 # Docker bind syntax cannot represent these paths safely.
@@ -54,6 +54,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# Reserve space before duplicating encrypted input; prepare() separately checks
+# authenticated plaintext sizes before unpacking. Check app disk headroom.
+archive_size="$(stat -c %s "$archive")"
+key_size="$(stat -c %s "$keyfile")"
+free_kib="$(df -Pk "$work" | awk 'NR==2 {print $4}')"
+[[ "$archive_size" =~ ^[0-9]+$ && "$key_size" =~ ^[0-9]+$ && "$free_kib" =~ ^[0-9]+$ ]] || die 'Cannot check free space'
+(( key_size > 0 && key_size <= 4096 )) || die 'Invalid backup key file size'
+(( free_kib * 1024 >= 3 * archive_size + 536870912 )) || die 'Not enough free space for a private restore copy'
 mkdir "$work/output" "$work/input"
 # Copy input files so arbitrary owner-only backup keys can be read by the
 # unprivileged preparer, without changing source permissions or ownership.

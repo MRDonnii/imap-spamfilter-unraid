@@ -1,6 +1,11 @@
 # Ændringslog
 
-## Under udvikling efter 2.15.0-beta
+## 2.16.0 — 2026-11-23 (beta)
+
+- Drift samler antivirusstatus/signaturalder og antal/alder for ventende
+  flytninger, træning, fortrydelse og AI. Gamle/manglende helbredsmålinger
+  vises som ukendte. Ventetid er ikke i sig selv en fejl; ingen nye alarmer
+  eller mailhandlinger. Visningen er kun for administratorer.
 
 - Forsinkede AI-svar respekterer en hævet postkassegrænse. En ren AI-
   scoreflytning aflyses også, hvis grænsen hæves i ventetiden. Oprindelige
@@ -42,7 +47,8 @@
 - Den fælles første-scannings-/flyttepolitik er udskilt i `decisionpolicy.py`
   med politikversion og stabile afgørelsesgrunde. Den eksisterende prioritering
   og motorens indgange er bevaret. Dette er første del af udskillelsen.
-- Udviklingsændringerne indgår ikke i det allerede udgivne 2.15.0-arkiv.
+- Udbygningen udgives i et nyt signeret 2.16.0-kildearkiv. Den tidligere
+  2.15.0-release og dens artifacts bevares uændret.
 
 ## 2.15.0 — 2026-11-23 (beta)
 

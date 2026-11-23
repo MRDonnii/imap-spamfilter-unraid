@@ -58,6 +58,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import math
 import queue
 import re
 import secrets
@@ -920,6 +921,16 @@ def worker_alive() -> bool:
 
 def queue_size() -> int:
     return _QUEUE.qsize()
+
+
+def queue_status(*, now: float | None = None) -> dict[str, Any]:
+    """Metadata only; excludes a job already being processed by the worker."""
+    now = time.time() if now is None else now
+    with _QUEUE.mutex:
+        stamps = [job.queued_at for job in _QUEUE.queue]
+    valid = bool(stamps) and all(isinstance(ts, (int, float)) and not isinstance(ts, bool)
+                                and math.isfinite(ts) and 0 < ts <= now for ts in stamps)
+    return dict(count=len(stamps), oldest_age_s=now-min(stamps) if valid else None)
 
 
 def maybe_queue(eng: Any, db: Any, acc: Any, sc: Any, *, msgid: str, uv: int, uid: int, folder: str,

@@ -428,9 +428,9 @@ Hver linje er et JSON-objekt, eksempel:
 
 Resultatet viser TP/TN/FP/FN, precision, recall, falsk-positiv-rate, falsk-negativ-rate og prøvestørrelse pr. postkasse. Manglende nævnere giver `null`. Eksport af brugerrettelser er et **skævt udvalgt prøveudvalg** og ikke dokumentation for samlet træfsikkerhed eller et uafhængigt holdout. For en reel før/efter-måling skal ejeren udtage og menneskeligt mærke et repræsentativt, på forhånd reserveret udvalg, holde det ude af al træning og bruge samme scorergrundlag. Familiepost er ikke testet eller uploadet med denne udgivelse.
 
-### Sammenlign baseline og kandidat (under udvikling)
+### Sammenlign baseline og kandidat (2.16)
 
-Den næste udviklingsversion tilføjer en parret sammenligning. Den indgår ikke i
+Version 2.16 tilføjer en parret sammenligning. Den indgår ikke i
 den oprindeligt publicerede 2.15.0-beta fra commit `108134d`.
 
 ```sh
@@ -471,7 +471,7 @@ brugerrettelser beholder sin selektionsbias. Intet aktiveres automatisk.
 CLI-exitkode 0 betyder, at sammenligningen kunne udføres; læs `status` i JSON,
 hvis rapporten bruges i et script.
 
-### Beslutningspolitik (under udvikling)
+### Beslutningspolitik (2.16)
 
 `decisionpolicy.py` samler den eksisterende prioritering for første scanning og
 genkontrol før ventende flytninger i en ren funktion uden SQL, netværk eller
@@ -506,7 +506,7 @@ ikke en komplet samlet beslutningshistorik. Udskillelsen og sporene ændrer ikke
 beslutningsrækkefølgen, herunder at en allerede eksplicit frigivet mail bevarer
 sin sticky brugerafgørelse.
 
-### Reservér prøvemateriale mod fremtidig læring (under udvikling)
+### Reservér prøvemateriale mod fremtidig læring (2.16)
 
 For en lokal `.eml`, der er udtaget til evaluering, kan ejeren reservere
 indholdet **før** det bruges til træning:
@@ -551,7 +551,7 @@ udtagning eller fuld kontrol af labels' påvirkning på alle tillidssignaler.
 Databasen skal gendannes sammen med reservationerne ved backup/rollback;
 ældre kode respekterer ikke den nye reservation.
 
-### Versionsgrundlag for AI-vurderinger (under udvikling)
+### Versionsgrundlag for AI-vurderinger (2.16)
 
 Nye AI-poster gemmer promptversion, version af faktaudtræk, fingerprint af
 systeminstruktionen, AI-politikversion samt fingerprint og JSON for de faktisk
@@ -577,7 +577,7 @@ kan heller ikke afbryde fortolkningen. Filtreringen fortsætter efter sin
 almindelige vurdering. Testene bruger en falsk Ollama-server; faktisk modstand
 mod prompt-injektion og forbedring på familiens mail er endnu ikke målt.
 
-### Parallel prøve på én postkasse (under udvikling)
+### Parallel prøve på én postkasse (2.16)
 
 Ejeren kan registrere en kandidatgrænse parallelt med fremtidige normale
 første-scanninger på en bestemt konto:
@@ -611,3 +611,24 @@ grænse foretages bevidst på den valgte kontos eksisterende indstillingsside.
 De normale grænser og sikkerhedsbremsen for faktiske flytninger gælder fortsat.
 Flere kandidat-afgørelser er ikke i sig selv dokumentation for bedre filtrering;
 brug det lokale, menneskeligt mærkede evalueringsgrundlag før en beslutning.
+
+
+### Samlet driftsblik (2.16)
+
+**Drift → Antivirus og ventende arbejde** viser den seneste lokale
+ClamAV-måling og virusdefinitionernes alder. Målinger ældre end 10 minutter,
+fremtidige tidsstempler og manglende data vises som ukendte. Et bevidst
+`SF_CLAMAV=0` skelnes fra en fejl, der slog antivirus fra. Dette gælder
+all-in-one-containeren; der foretages ingen ekstra netværksprober fra siden.
+
+Antal/alder for planlagte flytninger, aktive træningsjob og fortrydelsesjob
+tæller kun konfigurerede konti. Fjernede kontis gamle rækker tælles ikke med.
+AI-køen viser ventende jobs i denne proces og udelader et job, som allerede
+behandles. Køtal og alder er observationer, ikke automatisk bevis for fejl;
+planlagt ventetid og ejerens pauser kan være tilsigtede. Der sendes ingen nye
+alarmer. Kortet og de eksisterende kontroller er kun for administratorer.
+
+Et forsinket AI-svar bruger den højeste af den oprindelige effektive grænse
+og kontoens aktuelle grænse. En hævning før en ventende ren AI-scoreflytning
+kan også aflyse den. Manuelle spamafgørelser, eksplicitte blokeringer og
+registrerede trusler bevarer deres særregler.

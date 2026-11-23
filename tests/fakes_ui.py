@@ -111,7 +111,7 @@ _LOCAL_RE = re.compile(r"^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}$")
 
 
 class FakeEngine:
-    VERSION = "2.15.0"
+    VERSION = "2.16.0"
     # Same defaults as filter.py (the rules dialog never blocks them).
     DEFAULT_OWNER_PLATFORM_DOMAINS = ["vexar.example"]
     DEFAULT_WEBSHOP_DOMAINS = ["pinsikbing.example", "gravisk.example", "vexar.example"]
