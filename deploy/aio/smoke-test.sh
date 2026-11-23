@@ -326,7 +326,7 @@ with tempfile.TemporaryDirectory(prefix="sf-smoke-backup-") as tmp:
     assert result["ok"] and result["app_started"] and result["redis_keys"] > 0
     print("restore startup drill: app + Bayes loaded; no mail workers or IP listeners")
 '
-  check docker exec -u "$FILTER_UID:$FILTER_GID" "$name" /usr/local/bin/python3 -c "$drill_py"
+  check docker exec -u "$FILTER_UID:$FILTER_GID" -w /app "$name" /usr/local/bin/python3 -c "$drill_py"
 fi
 
 if (( clamscan )); then

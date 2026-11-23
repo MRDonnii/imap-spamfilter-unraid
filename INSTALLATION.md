@@ -183,3 +183,11 @@ Scriptenes indhold kopieres direkte ind i User Scripts, så de kører ikke fra a
 | Er alle konti indlæst? | `docker logs spamfilter 2>&1 \| grep "loaded"` |
 | Kun rspamds linjer | `docker logs --since 1h spamfilter 2>&1 \| grep '^\[rspamd\]'` |
 | Lytter kun WebUI'en udadtil? | `docker exec spamfilter sf-health listeners` |
+
+## 2.15.0 beta: installation og kontrol
+
+Denne udgivelse leveres som signeret kildepakke til den eksisterende WebUI-opdatering. Vælg **System → Opdateringer → Beta**, kontroller version 2.15.0 og brug **Opdatér nu**, når du vil installere. Værtshjælperen verificerer pakken og bygger containeren lokalt som beskrevet ovenfor. Der publiceres ikke et nyt GHCR-image i denne kildebaserede udgivelse; CI bygger og prøver begge images, og all-in-one-prøven bruger en tom testinstallation.
+
+Tag en aktuel backup før installation. Efter opdateringen: kontroller versionsnummer, `sfctl doctor`, kontoernes forbindelser og **Drift → Scanningens dækning**. Dækningstabellen kræver nye hændelser; gamle brugerrettelser uden en ny første-scanningsobservation kan ikke indgå i den nye evaluering. En ældre frigivelse uden indholdsfingerprint kan kræve genfrigivelse, hvis mailen leveres til indbakken på ny.
+
+Den eksisterende opdateringsmekanisme bevarer det tidligere image og kildebackup til teknisk rollback. Skemaændringerne er additive, men gammel kode har igen de ID-fejl, som 2.15 retter. Brug derfor ikke en rollback som en vedvarende sikkerhedsløsning. Ved fuld datagendannelse skal kode, state og Redis passe sammen; følg BACKUP.md. Denne udgivelses arbejde ændrer ikke i sig selv din server eller dine postkasser.

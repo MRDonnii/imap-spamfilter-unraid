@@ -89,6 +89,8 @@ def card() -> str:
             dtxt, dtone = (f"lykkedes {adm._age_text(dr.get('age_s'))} siden ({str(dr.get('archive') or '')[:80]}"
                            " hentet ud af huset og kontrolleret; se resultatets omfang)"), "ok"
         pairs.append(("Gendannelseskontrol efter download", f'{kit.status_dot(dtone)} {h(dtxt)}'))
+        if dr.get('detail'):
+            pairs.append(("Kontrollens omfang", h(str(dr['detail'])[:300])))
     elif off and not off.get("skipped"):
         pairs.append(("Gendannelseskontrol efter download", '<span class="muted">ikke kørt endnu (hver 30. dag efter kopien ud af huset)</span>'))
     extra = kit.alert("Gamle øvelser kontrollerede kun arkivet. Fra 2.15 starter den månedlige øvelse også "

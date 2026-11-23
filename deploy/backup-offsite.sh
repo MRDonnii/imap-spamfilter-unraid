@@ -28,7 +28,9 @@
 #      downloaded (rclone copyto) into a temp dir inside the backup dir
 #      (/backup/.restore-drill.XXXXXX in the container), checked by the
 #      container with `sfctl backup-verify` (decrypts to nowhere, checks
-#      every sha256, writes nothing) and the temp dir is removed again.
+#      every sha256, writes nothing), then `sfctl backup-drill` starts the
+#      restored app + Redis on private Unix sockets without mail workers.
+#      The temp dir is removed again after both checks.
 #      Result: state/restore-drill.json {ok, ts, archive, detail, error}
 #      (0644; Drift -> Krypteret backup and host-monitor show it); a failed
 #      drill notifies, the copy itself still counts as done.
