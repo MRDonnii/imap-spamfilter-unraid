@@ -2,6 +2,11 @@
 
 ## Under udvikling efter 2.15.0-beta
 
+- Ny separat AIO-gendannelsesprøve fra krypteret backup. Kontrollerer app,
+  Rspamd, Redis og Unbound på en kontoløs kopi uden netværk/porte og med
+  containerbudgetter. Verificerer mounts/isolation før start og faktisk RDB-
+  indlæsning med en neutral markør. ClamAV og udbyderlogin er undtaget.
+
 - Familiens »Hvorfor?« bruger den registrerede blokering fra afgørelsen og
   omskriver ikke gamle mails med nye regler. Manglende forklaring udlægges ikke
   som en udokumenteret scoreoverskridelse. Reserveret prøvemateriale får en

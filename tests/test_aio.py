@@ -32,7 +32,7 @@ from fakes_deploy import base_env, install_fake_bin, read_state, write_state  # 
 import aio_render as render  # noqa: E402
 
 AIO_SCRIPTS = ["build.sh", "smoke-test.sh", "migrate.sh", "rollback.sh", "cleanup.sh", "update.sh"]
-AIO_SHELL = AIO_SCRIPTS + ["lib-aio.sh", "build-check.sh", "sf-entrypoint", "sf-run", "sf-fatal-listener",
+AIO_SHELL = AIO_SCRIPTS + ["restore-stack-drill.sh", "lib-aio.sh", "build-check.sh", "sf-entrypoint", "sf-run", "sf-fatal-listener",
                            "sf-clamav"]
 AIO_IMG = "imap-spamfilter-unraid:2.15.0"
 AIO_LABELS = {"spamfilter.layout": "aio", "spamfilter.version": "2.15.0"}

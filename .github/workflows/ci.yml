@@ -106,6 +106,17 @@ jobs:
           mkdir -p "$app/operations"
           sudo env SPAMFILTER_APP="$app" SF_AIO_CPUS="$(nproc)" SF_AIO_MEMORY=2g SF_GATE_MIN_UPTIME=10 SF_CLAMAV=0 \
             deploy/aio/smoke-test.sh --fresh --learn-test --image imap-spamfilter-unraid:ci
+      - name: Encrypted full stack restore (no network or ports)
+        run: |
+          fixture="$RUNNER_TEMP/restore-fixture"
+          mkdir -m 700 "$fixture"
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --memory 2g --cpus 1 --pids-limit 64 --workdir /app \
+            -v "$fixture:/fixture" -v "$PWD/tests/make_stack_restore_fixture.py:/fixture-maker.py:ro" \
+            --entrypoint /usr/local/bin/python3 imap-spamfilter-unraid:ci /fixture-maker.py
+          sudo env SPAMFILTER_APP="$RUNNER_TEMP/restore-drill" \
+            deploy/aio/restore-stack-drill.sh --archive "$fixture/fixture.sfbak" \
+              --key-file "$fixture/fixture.key" --image imap-spamfilter-unraid:ci
       # 2.12 (#7): the frozen image - every Python distribution in it, checked
       # with pip-audit (exact versions, no resolution), and Trivy on the whole
       # image (OS packages + language packages): HIGH/CRITICAL with a fix fail

@@ -187,3 +187,45 @@ Budgetterne gælder **underprocesserne**. Dekryptering, udpakning og SQLite-
 integritetskontrol kører fortsat i den kaldende proces under containerens
 almindelige grænser. Der oprettes ingen ny container/cgroup. Rspamd, ClamAV,
 eksterne tjenester og login på mailudbyderen er stadig uden for denne prøve.
+
+### Separat offlineprøve af den gendannede AIO-stak (under udvikling)
+
+Kør fra kildetræet på Docker-værten som root, med et lokalt bygget AIO-billede
+som indeholder `stackrestore.py`:
+
+```sh
+deploy/aio/restore-stack-drill.sh --archive /sti/backup.sfbak \
+  --key-file /privat/backup.key --image imap-spamfilter-unraid:VERSION
+```
+
+Nøglen læses fra en fil; selve nøgleværdien må ikke stå i kommandoen. Scriptet
+ændrer ikke den oprindelige nøgle, backup eller kørende containere. Det opretter
+sin egen private mappe under `operations/restore-drills`, dekrypterer kopien og
+kontrollerer SQLite. Alle konti, ventende job, IMAP-/SMTP-hemmeligheder,
+udbakke, push-abonnementer og AI-indstillinger fjernes eller deaktiveres i
+kopien før opstart. Historik og databaseindhold er stadig private data.
+
+Forberedelse og runtime kører i hver sin nye container med `--network none`,
+ingen publicerede porte, skrivebeskyttet rodfilsystem og grænser for CPU,
+hukommelse og processer. Scriptet kontrollerer Docker-daemonens faktiske
+netværk, porte, mounts og ressourcegrænser **før** hver container startes.
+Runtime får kun den nye appdata-kopi, hverken original installation,
+backuparkiv eller nøgle. Standardbudgettet er 2048 MiB pr. container; vælg
+512–4096 med `--memory-mib`. OOM, timeout eller manglende helbred giver fejl.
+
+Prøven kræver grønt helbred for app, Rspamd, Redis og Unbound samt login-side
+og scanning af en neutral mail. En tilfældig, neutral markør skrives til
+**kopiens** RDB før runtime starter og læses derfra bagefter. Derved opdages
+bl.a. en tom Redis-start, selv om HTTP og processer ellers svarer. Markøren
+fjernes efter kontrollen. Læsbare Rspamd-/Unbound-konfigurationer fra backupen
+bevares; manglende private servicekonfigurationer får billedets skabeloner med
+de gendannede backendnøgler. RDB indlæses med AOF slået fra i kopien.
+
+Det er en offlineprøve af disse fire dele. ClamAV startes bevidst ikke, fordi
+signaturbasen ikke indgår i backupen; scriptet kontrollerer, at antivirus er
+slået fra. Mailudbyderlogin, udgående DNS/SMTP, download af virusdefinitioner,
+alle historiske custom-konfigurationer og faktisk træfsikkerhed godkendes
+ikke af prøven. Oprydning fjerner kun containere med ID'er oprettet af denne
+kørsel og dens egen mappe. Hvis Docker ikke kan fjerne en prøvecontainer,
+bevares kopien, og scriptet returnerer fejl. Der installeres eller aktiveres
+intet i produktion.
