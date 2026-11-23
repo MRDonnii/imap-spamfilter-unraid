@@ -6571,6 +6571,8 @@ def _execute_due_moves_in(client: IMAPClient, db: Db, log: logging.Logger, acc: 
                 skip = "move_skipped_rule"
             elif (msg is not None and not threat and not msg["user_verdict"]
                   and not msg["rule_hit"] and _row_get(r, "origin") not in ("campaign", "ai")
+                  and _row_get(r, "threshold") is not None and msg["our_score"] is not None
+                  and acc.threshold > float(r["threshold"])
                   and float(msg["our_score"] or 0) < acc.threshold):
                 skip = "move_skipped_threshold"
             elif (_row_get(r, "origin") in ("zap", "ai") and "\\Seen" in flags and not threat
