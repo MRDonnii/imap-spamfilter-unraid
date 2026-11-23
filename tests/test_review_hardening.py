@@ -189,3 +189,23 @@ def test_valid_transport_changes_preserve_identity_but_body_case_does_not(eng):
     raw = b'Received: relay-a\r\nFrom: sender@example.org\r\nSubject: Hello\r\n\r\nCase Sensitive Body'
     assert eng.mailidentity.fingerprint(raw) == eng.mailidentity.fingerprint(raw.replace(b'relay-a', b'relay-b'))
     assert eng.mailidentity.fingerprint(raw) != eng.mailidentity.fingerprint(raw.replace(b'Case', b'case'))
+
+
+def test_simultaneous_first_delivery_never_returns_another_payloads_key(eng, monkeypatch):
+    h = Harness(eng, monkeypatch)
+    identity = eng.mailidentity
+    original = make_message('racing@x', body='original delivery')
+    changed = make_message('racing@x', body='different delivery')
+    fired = False
+    class InterleavedConnection:
+        def execute(self, sql, args=()):
+            nonlocal fired
+            if sql.startswith('INSERT OR IGNORE INTO mail_identity') and not fired:
+                fired = True
+                identity.bind(h.db.conn, h.acc.name, 'racing@x', original)
+            return h.db.conn.execute(sql, args)
+    key = identity.bind(InterleavedConnection(), h.acc.name, 'racing@x', changed)
+    stored = identity.binding(h.db.conn, h.acc.name, key)
+    assert fired and key != 'racing@x'
+    assert stored[1] == identity.fingerprint(changed)
+    assert identity.binding(h.db.conn, h.acc.name, 'racing@x')[1] == identity.fingerprint(original)

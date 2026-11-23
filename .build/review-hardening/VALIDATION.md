@@ -19,3 +19,6 @@ A subsequent full local run passed 4005 tests with 7 skips. A final adversarial 
 
 
 Malformed/headerless message regressions also failed before the final fingerprint guard: lowercasing a non-header line or ignoring a Received-like line could otherwise discard meaningful body differences. Invalid header blocks now fall back to hashing the entire normalized raw message; valid transport changes still preserve identity and body case remains significant. These negative/positive cases pass before the final CI run.
+
+
+A deterministic interleaving regression demonstrated the first-write race between a header-ID lookup and INSERT OR IGNORE. Binding now reads back the actual account/wire/fingerprint match and falls back to the content key when a competing delivery won the original ID. It never returns an unverified winner's key. The full focused identity/services/scanning/junk/notification/mailer set passed 299 tests after the fix.

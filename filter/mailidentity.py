@@ -52,8 +52,17 @@ def bind(conn, account: str, wire_id: str | None, raw: bytes, *, legacy_exists=F
                      and not re.search(r'[\x00-\x20\x7f"\\]', wire_id))
     key = (wire_id if safe_wire and not wire_id.startswith(PREFIX) and not conflict and not legacy_exists
            else PREFIX + digest)
-    conn.execute('INSERT OR IGNORE INTO mail_identity VALUES(?,?,?,?)', (account, key, wire_id, digest))
-    return key
+    for candidate in (key, PREFIX + digest):
+        conn.execute('INSERT OR IGNORE INTO mail_identity VALUES(?,?,?,?)',
+                     (account, candidate, wire_id, digest))
+        # Another connection may have bound the header ID after our SELECT.
+        # Return only a key that actually belongs to this payload, including
+        # when the competing writer chose a different key for the same mail.
+        stored = conn.execute('SELECT message_key FROM mail_identity WHERE account=? AND fingerprint=? '
+                              'AND wire_id IS ?', (account, digest, wire_id)).fetchone()
+        if stored:
+            return str(stored[0])
+    raise sqlite3.IntegrityError('mail identity could not be bound safely')
 
 
 def binding(conn, account: str | None, key: str):
