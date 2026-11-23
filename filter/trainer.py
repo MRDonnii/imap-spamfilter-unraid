@@ -765,7 +765,7 @@ def run_job(job_id: int, *, engine: Any = None, claim: bool = True,
                     if outcome == "learned":
                         c.learned += 1
                         streak = 0
-                    elif outcome in ("already", "declined"):
+                    elif outcome in ("already", "declined", "held_out"):
                         c.skipped += 1
                         streak = 0
                     elif outcome in ("rate_limited", "guarded"):
@@ -892,11 +892,11 @@ CREATE TABLE IF NOT EXISTS learn_list_items (
 );
 CREATE INDEX IF NOT EXISTS idx_learn_list_items_status ON learn_list_items(job_id, status);
 """
-LEARN_ITEM_STATUSES = ("pending", "learned", "already", "declined", "not_found", "ambiguous",
+LEARN_ITEM_STATUSES = ("pending", "learned", "already", "declined", "held_out", "not_found", "ambiguous",
                        "too_large", "deferred", "failed")
 # Item status -> job counter.
 _LEARN_COUNTER = {"learned": "learned", "already": "already", "not_found": "not_found",
-                  "ambiguous": "skipped", "too_large": "skipped", "declined": "skipped",
+                  "ambiguous": "skipped", "too_large": "skipped", "declined": "skipped", "held_out": "skipped",
                   "deferred": "skipped", "failed": "failed"}
 _learn_list_ok: set[str] = set()
 
@@ -1033,7 +1033,7 @@ def _learn_list_item(eng: Any, conn: sqlite3.Connection, db: Any, acc: Any, clie
         return "not_found"
     outcome = str(eng.learn_message(db, acc, bytes(raw), kind, mid, actor=job["created_by"] or "",
                                     reason=f"learn_list job={job['id']}", **kwargs))
-    status = {"learned": "learned", "already": "already", "declined": "declined",
+    status = {"learned": "learned", "already": "already", "declined": "declined", "held_out": "held_out",
               "rate_limited": "deferred"}.get(outcome, "failed")
     _set_item(conn, int(job["id"]), acc.name, mid, status, folder=folder, previous=previous)
     return status

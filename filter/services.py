@@ -90,6 +90,7 @@ _LEARN_NOTE = {
                   "have, så afmeld dem i mailen.",
     "already": " (var allerede lært)",
     "declined": " – filteret genkendte den allerede, så der var intet nyt at lære.",
+    "held_out": " – ikke brugt til læring, fordi indholdet er reserveret til evaluering.",
     "rate_limited": " – læring udskudt: grænsen pr. time er nået.",
     "error": " – læring fejlede: rspamd svarede ikke.",
     "too_large": " – for stor til at blive lært (over 5 MB).",
@@ -731,7 +732,7 @@ def _do_release(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, Any
     _record_verdict(db, eng, acc, mid, folder=fmap["inbox"], verdict="ham", actor=actor,
                     our_action="manual_release", moved_to_junk=False, learn_outcome=outcome,
                     raw=raw, stat="released", event="manual_release")
-    learned_ok = outcome in ("learned", "already", "declined")
+    learned_ok = outcome in ("learned", "already", "declined", "held_out")
     note = " og lært som legitim." if outcome == "learned" else _learn_note(outcome, "ham")
     if outcome == "already":
         note = " og lært som legitim" + note + "."
@@ -781,7 +782,7 @@ def _do_mark_spam(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, A
     if outcome != "newsletter":
         # A newsletter one person does not want is no campaign for the others.
         _campaign_after_spam(eng, db, acc, mid, raw, actor, "manual_mark_spam", outcome)
-    learned_ok = outcome in ("learned", "already", "declined", "newsletter")
+    learned_ok = outcome in ("learned", "already", "declined", "held_out", "newsletter")
     note = " og lært som spam." if outcome == "learned" else _learn_note(outcome, "spam")
     if outcome == "already":
         note = " og lært som spam" + note + "."
@@ -890,7 +891,7 @@ def _do_learn(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, Any],
     label = "legitim" if kind == "ham" else "spam"
     if outcome in ("learned", "already"):
         return _res(mid, True, "ok", f"Lært som {label}{_LEARN_NOTE[outcome]}.")
-    if outcome == "declined":   # already in that class: done, nothing to learn
+    if outcome in ("declined", "held_out"):
         return _res(mid, True, "ok", f"Markeret som {label}{_learn_note(outcome, kind)}")
     return _res(mid, False, f"learn_{outcome}",
                 f"Markeret som {label}{_LEARN_NOTE.get(outcome, ' – læring fejlede.')}")
@@ -3316,7 +3317,8 @@ _LEARN_LIST_STATUS_TEXT = {
 }
 _ITEM_STATUS_TEXT = {
     "pending": "Venter", "learned": "Lært", "already": "Var allerede lært",
-    "declined": "rspamd ville ikke lære den", "not_found": "Mailen findes ikke længere",
+    "declined": "rspamd ville ikke lære den", "held_out": "Reserveret til evaluering – ikke trænet",
+    "not_found": "Mailen findes ikke længere",
     "ambiguous": "Flere forskellige mails med samme Message-ID – sprunget over",
     "too_large": "For stor (over 5 MB)", "deferred": "Udskudt – prøv igen om 10 minutter",
     "failed": "Fejlede",

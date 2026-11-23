@@ -852,6 +852,24 @@ def _state_set(conn: sqlite3.Connection, key: str, value: str | None, now: int) 
 
 def fuzzy_add(eng: Any, raw: bytes | None, *, conn: sqlite3.Connection | None = None,
               now: int | None = None, op: str = "fuzzyadd") -> str:
+    """Never add reserved test content; deletion of an old entry remains possible."""
+    if not raw:
+        return "skipped"
+    if op != "fuzzyadd":
+        return _fuzzy_add_post(eng, raw, conn=conn, now=now, op=op)
+    import holdout
+    try:
+        with holdout.learning_guard(getattr(eng, "DB_PATH", None), raw) as allowed:
+            if not allowed:
+                return "held_out"
+            return _fuzzy_add_post(eng, raw, conn=conn, now=now, op=op)
+    except (holdout.HoldoutError, OSError, sqlite3.Error):
+        log.warning("fuzzy learning skipped: holdout registry unavailable")
+        return "error"
+
+
+def _fuzzy_add_post(eng: Any, raw: bytes | None, *, conn: sqlite3.Connection | None = None,
+                    now: int | None = None, op: str = "fuzzyadd") -> str:
     """POST the mail to the controller's /fuzzyadd (or /fuzzydel with
     op='fuzzydel'), flag FUZZY_FLAG.
     'added' | 'failed' | 'error' | 'backoff' | 'unavailable' | 'skipped'.

@@ -51,6 +51,7 @@ import siteconfig
 import mailidentity
 import quality
 import decisionpolicy
+import holdout
 
 # A1: the container runs `python -u filter.py`, so this module is __main__.
 # Register it under its import name too so `import filter` in services,
@@ -1468,6 +1469,7 @@ def init_db() -> None:
         conn.executescript(SCHEMA)
         conn.executescript(mailidentity.SCHEMA)
         conn.executescript(quality.SCHEMA)
+        conn.execute(holdout.SCHEMA)
         _migrate(conn)
         conn.executescript(SCHEMA_INDEXES)
         try:
@@ -2832,6 +2834,20 @@ def _rspamd_alive() -> bool:
 
 
 def rspamd_learn(raw: bytes, kind: str, identity: str | None = None, *, user: str | None = None) -> str:
+    """Gate all Bayes POSTs, including trainer mail without Message-ID."""
+    if kind not in ("spam", "ham"):
+        raise ValueError(f"invalid learn kind {kind!r}")
+    try:
+        with holdout.learning_guard(DB_PATH, raw) as allowed:
+            if not allowed:
+                return "held_out"
+            return _rspamd_learn_post(raw, kind, identity, user=user)
+    except (holdout.HoldoutError, OSError, sqlite3.Error):
+        logging.getLogger("filter").warning("Bayes learning skipped: holdout registry unavailable")
+        return "error"
+
+
+def _rspamd_learn_post(raw: bytes, kind: str, identity: str | None = None, *, user: str | None = None) -> str:
     """POST to /learnspam or /learnham; classify the controller's reply.
 
     Returns one of:
@@ -3673,7 +3689,7 @@ def learn_message(db: Db, acc: Account, raw: bytes, kind: str, message_id: str |
                   allow_threat: bool = False, bypass_cooldown: bool = False) -> str:
     """Single learn entry point (A2) for engine, services and trainer.
 
-    Returns 'learned' | 'already' | 'declined' | 'rate_limited' | 'error'.
+    Returns 'learned' | 'already' | 'declined' | 'held_out' | 'rate_limited' | 'error'.
     Applies the safeguards: hourly learn limit (unless bypass_rate),
     flip-flop cooldown between opposite learns, 'unlearnable' bookkeeping
     for content rspamd refuses, events and stats. Does not gate on mode:
@@ -3688,6 +3704,8 @@ def learn_message(db: Db, acc: Account, raw: bytes, kind: str, message_id: str |
     if kind not in ("spam", "ham"):
         raise ValueError(f"invalid learn kind {kind!r}")
     log = logging.getLogger(acc.name)
+    if holdout.reserved(db.conn, raw):
+        return _holdout_learn_result(db, message_id)
     if message_id and is_own_registered(db.conn, db.account, message_id):
         log.info("not learning %s: a mail this filter created", message_id)
         return "declined"
@@ -3728,6 +3746,8 @@ def learn_message(db: Db, acc: Account, raw: bytes, kind: str, message_id: str |
     if not bypass_rate and not check_rate(db, log, "learn", acc.max_learns_per_hour):
         return "rate_limited"
     outcome = rspamd_learn(raw, kind, bayes_identity(acc))
+    if outcome == "held_out":
+        return _holdout_learn_result(db, message_id)
     if outcome == "error":
         log.warning("rspamd learn(%s) failed for %s", kind, message_id)
         db.log_event("learn_failed", message_id, detail=f"{kind} {detail}"[:300])
@@ -3766,6 +3786,15 @@ def learn_message(db: Db, acc: Account, raw: bytes, kind: str, message_id: str |
             db.bump(f"learned_{kind}")
     log.info("learned %s as %s (%s): %s", message_id, kind, reason or "-", outcome)
     return outcome
+
+
+def _holdout_learn_result(db: Db, message_id: str | None) -> str:
+    """Terminal skip without a learned_as mark, ledger entry or learn count."""
+    with db.tx():
+        if message_id and db.get_message(message_id) is not None:
+            db.update_message(message_id, pending_learn=None, pending_learn_at=None)
+        db.log_event("learn_held_out", message_id, detail="reserveret prøvemateriale; ingen læring")
+    return "held_out"
 
 
 def _ledger_record(conn: sqlite3.Connection, account: str, message_id: str, kind: str,
@@ -3927,7 +3956,7 @@ def try_learn(
     if acc.mode == "shadow" or not acc.learn_from_moves:
         return False
     res = learn_message(db, acc, raw, kind, msgid, actor="engine", reason=reason)
-    return res in ("learned", "already", "declined")
+    return res in ("learned", "already", "declined", "held_out")
 
 
 # ----- status texts (Danish, shown in the WebUI) ---------------------------
@@ -7363,7 +7392,7 @@ def _drain_train_folder(
             with db.tx():
                 db.upsert_message(msgid, folder, sender, subject, _internaldate_ts(data))
         res = learn_message(db, acc, raw, kind, msgid, actor="engine", reason=reason)
-        if res in ("learned", "already", "declined"):
+        if res in ("learned", "already", "declined", "held_out"):
             done.append(uid)
             if not synthetic:
                 moved_msgids.append(msgid)

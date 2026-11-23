@@ -2,6 +2,10 @@
 
 ## Under udvikling efter 2.15.0-beta
 
+- `sfctl quality-reserve` reserverer en lokal mailfil mod fremtidig Bayes- og
+  fuzzy-læring gennem appen, også på tværs af konti og import uden Message-ID.
+  Kun fingerprint/ID/tid gemmes. Kendt tidligere læring afvises; historisk
+  træningsfrihed kan ikke bevises, og ældre kode respekterer ikke reservationen.
 - `sfctl quality-compare` sammenligner baseline og kandidat på samme lokale,
   menneskeligt mærkede udvalg. Viser nye/rettede fejl og valgt fejlomkostning
   pr. postkasse; afviser ændrede labels og udvalg. Rapporten gælder kun prøven

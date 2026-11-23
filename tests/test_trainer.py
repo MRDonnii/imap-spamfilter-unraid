@@ -675,6 +675,7 @@ def test_learn_list_records_previous_class_and_flips(eng, imap):
 
 @pytest.mark.parametrize("outcome,status,counter", [
     ("already", "already", "already"), ("declined", "declined", "skipped"),
+    ("held_out", "held_out", "skipped"),
     ("rate_limited", "deferred", "skipped"), ("error", "failed", "failed")])
 def test_learn_list_outcomes(tmp_path, imap, outcome, status, counter):
     eng = FakeEngine(tmp_path, imap=imap, learn_outcome=outcome)

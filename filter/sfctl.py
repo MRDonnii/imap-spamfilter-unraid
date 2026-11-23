@@ -1903,6 +1903,20 @@ def cmd_quality_compare(args):
     return EXIT_OK
 
 
+def cmd_quality_reserve(args):
+    import holdout
+    try:
+        with Path(args.file).open('rb') as f:
+            raw = f.read(10 * 1024 * 1024 + 1)
+        result = holdout.reserve(ui.DB_PATH, raw, args.sample_id)
+    except (holdout.HoldoutError, OSError) as ex:
+        raise CliError('Reservation afvist: ' + (str(ex) if isinstance(ex, holdout.HoldoutError)
+                                               else type(ex).__name__)) from None
+    audit('quality_reserve', detail=args.sample_id)
+    out(json.dumps(result, ensure_ascii=False, indent=2))
+    return EXIT_OK
+
+
 def cmd_quality_export(args):
     import quality
     with sqlite3.connect(ui.DB_PATH) as conn:
@@ -2372,6 +2386,9 @@ def build_parser() -> argparse.ArgumentParser:
     add("push-reset", "nødstop: fjern alle enheder med beskeder og lav en ny nøgle (VAPID)", cmd_push_reset)
     p = add("quality-evaluate", "evaluér et lokalt mærket holdout-sæt uden træning", cmd_quality_evaluate)
     p.add_argument("file", help="lokal JSONL-fil; se CONFIGURATION.md")
+    p = add("quality-reserve", "reservér lokal .eml mod fremtidig Bayes/fuzzy-læring", cmd_quality_reserve)
+    p.add_argument("file", help="lokal mailfil, højst 10 MiB; indholdet gemmes ikke i registret")
+    p.add_argument("--sample-id", required=True, help="neutralt ID, fx sample-001; ingen adresser eller emner")
     p = add("quality-compare", "sammenlign baseline/kandidat på samme lokale prøveudvalg", cmd_quality_compare)
     p.add_argument("baseline", help="lokal JSONL-fil med oprindelige afgørelser")
     p.add_argument("candidate", help="lokal JSONL-fil med kandidatens afgørelser på samme mails")

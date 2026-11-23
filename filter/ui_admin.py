@@ -2939,9 +2939,11 @@ REPAIR_MAX_PICKS = 2000              # services.LEARN_LIST_MAX_ITEMS
 TARGET_RATIO = 0.5                   # spam:ham >= 1:2 (services.REBALANCE_DEFAULT_RATIO)
 LL_HEADERS = [("Liste", ""), ("Status", ""), ("Fremskridt", "job-prog-col"), ("Resultat", ""), ("", "end")]
 LL_ITEM_FILTERS = (("", "Alle"), ("learned", "Lært"), ("already", "Var lært"), ("not_found", "Ikke fundet"),
+                   ("held_out", "Reserveret til evaluering"),
                    ("deferred", "Udskudt"), ("failed", "Fejlede"), ("pending", "Venter"))
 LL_ITEM_TONES = {"learned": "ok", "already": "neutral", "pending": "neutral", "not_found": "warn",
-                 "ambiguous": "warn", "too_large": "warn", "deferred": "warn", "declined": "bad", "failed": "bad"}
+                 "ambiguous": "warn", "too_large": "warn", "deferred": "warn", "declined": "bad", "failed": "bad",
+                 "held_out": "neutral"}
 
 
 def _ratio_or_none(value: Any) -> float | None:

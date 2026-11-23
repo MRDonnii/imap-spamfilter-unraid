@@ -174,6 +174,23 @@ def test_quality_compare_rejects_changed_labels(env, capsys, monkeypatch):
     assert 'private-id' not in err
 
 
+def test_quality_reserve_keeps_mail_local_and_writes_only_a_content_reservation(env, capsys, monkeypatch):
+    import holdout
+    raw = b'From: sender@sample.example\r\nSubject: PRIVATE SUBJECT\r\n\r\nPRIVATE BODY'
+    mail = env.state / 'sample.eml'
+    mail.write_bytes(raw)
+    monkeypatch.setattr(engine, 'connect', lambda *a, **kw: pytest.fail('reservation must not contact IMAP'))
+    code, out, err = run(capsys, monkeypatch, 'quality-reserve', str(mail), '--sample-id', 'sample-001')
+    assert code == 0 and not err
+    result = json.loads(out)
+    assert result['reserved'] and result['scope'] == 'matching_content_all_accounts'
+    assert 'PRIVATE' not in out
+    assert mail.read_bytes() == raw
+    with sqlite3.connect(env.db) as conn:
+        assert holdout.reserved(conn, raw)
+    assert last_audit(env)['action'] == 'quality_reserve'
+
+
 def test_status(env, capsys, monkeypatch):
     (env.state / "heartbeat").write_text(f"{int(__import__('time').time()) - 5} boot\n")
     dashboard.settings_set("external_url", "https://spam.example.dk")

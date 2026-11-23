@@ -482,3 +482,48 @@ Disse felter er foreløbig runtime-metadata; der gemmes endnu ikke en komplet
 beslutningshistorik. Asynkrone AI-, kampagne- og ZAP-forløb er ikke alle samlet
 under denne grænse. Udskillelsen ændrer ikke beslutningsrækkefølgen, herunder
 at en allerede eksplicit frigivet mail bevarer sin sticky brugerafgørelse.
+
+### Reservér prøvemateriale mod fremtidig læring (under udvikling)
+
+For en lokal `.eml`, der er udtaget til evaluering, kan ejeren reservere
+indholdet **før** det bruges til træning:
+
+```sh
+docker exec spamfilter sfctl quality-reserve /state/evaluation/sample-001.eml --sample-id sample-001
+```
+
+Registret `quality_holdout` gemmer kun indholdsfingerprint, neutralt sample-ID
+og tidspunkt i den eksisterende database. Mailteksten forbliver i ejerens lokale
+fil. Hold den i en privat mappe og brug 0600 på mail- og facitfiler. Brug neutrale
+sample-ID'er uden navne, adresser eller emner. Samme reservation kan gentages;
+et ID kan ikke genbruges til andet indhold.
+
+Matchende indhold bliver fremover sprunget over ved appens Bayes-læring og
+tilføjelse til lokal fuzzy-genkendelse. Det gælder på tværs af postkasser og
+Bayes-puljer, også ved import uden Message-ID, genopbygning og eksplicitte
+læringshandlinger. Status er `held_out`, på dansk **Reserveret til evaluering –
+ikke trænet**. Det giver ingen læringstæller eller falsk `learned_as`-registrering.
+En allerede eksisterende fuzzy-post kan stadig fjernes ved en frigivelse.
+Almindelig mailbehandling og ejerens handlinger er fortsat aktive; reservationen
+er en afgrænsning af læring, ikke en beskyttelse mod flytning.
+
+Reservation og lærings-POST deler en proceslås. En reservation venter på en
+igangværende lærings-POST; efter reservationen er gemt, kan næste matchende POST
+ikke starte. Et optaget eller utilgængeligt register giver en fejl frem for at
+ignorere beskyttelsen. Hvis databasen er optaget af en skriver, afvises selve
+reservationen uden ændringer; prøv igen senere.
+
+**Det er ingen garanti for et uafhængigt holdout:** Kendt tidligere Bayes-læring
+af samme fingerprint afvises, også fra en anden konto. Fravær af en lokal
+registrering beviser ikke fravær af tidligere læring. Funktionen tilbagefører
+hverken tidligere Bayes/fuzzy-læring eller træning uden for denne app. Fingerprint
+ignorerer kendte transportheadere og linjeskift, men ændrede øvrige headere eller
+indhold kan give et andet fingerprint. Ensartede eller videresendte varianter
+skal derfor udtages samlet og vurderes særskilt.
+
+Gem evalueringslabels i det lokale facitdatasæt. Brugerrettelser i WebUI kan
+stadig ændre brugerafgørelser, kontakter og øvrige tilstande og skal ikke bruges
+som en blind mærkningsproces. Der er endnu ingen automatisk repræsentativ
+udtagning eller fuld kontrol af labels' påvirkning på alle tillidssignaler.
+Databasen skal gendannes sammen med reservationerne ved backup/rollback;
+ældre kode respekterer ikke den nye reservation.
