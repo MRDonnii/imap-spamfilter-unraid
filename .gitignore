@@ -27,6 +27,9 @@ __pycache__/
 .vscode/
 .DS_Store
 
+# Local collaboration notes; never publish in the public repository.
+.agent-private/
+
 # generated build artefacts (screenshots, workflow scratch)
 .build/screenshots/
 .build/wf-*.js

@@ -50,6 +50,7 @@ from imapclient.exceptions import IMAPClientAbortError, IMAPClientError, LoginEr
 import siteconfig
 import mailidentity
 import quality
+import decisionpolicy
 
 # A1: the container runs `python -u filter.py`, so this module is __main__.
 # Register it under its import name too so `import filter` in services,
@@ -212,26 +213,14 @@ NOTJUNK_KEYWORDS = frozenset({"$NotJunk", "NotJunk", "NonJunk", "$NonJunk"})
 DELETED_FLAG = b"\\Deleted"
 
 VALID_MODES = {"shadow", "flag", "move"}
-STICKY_HAM_ACTIONS = frozenset({"manual_release", "user_rescued"})
+STICKY_HAM_ACTIONS = decisionpolicy.STICKY_HAM_ACTIONS
 # Rows that say "this Message-ID was in a spam folder" (rescue evidence).
 JUNK_ACTIONS = frozenset({"moved_to_junk", "provider_junk", "user_junked", "manual_mark_spam"})
 # Junk-poll sightings of these were put there by the filter / WebUI, not
 # by the user's mail client, so they never count as a user verdict.
 OUR_JUNK_ACTIONS = frozenset({"pending_move", "moved_to_junk", "manual_mark_spam", "move_failed"})
-DMARC_SPOOF_SYMBOLS = frozenset({"DMARC_POLICY_REJECT", "DMARC_POLICY_QUARANTINE"})
-# An allow rule matches the (forgeable) header From. Besides a DMARC
-# reject/quarantine verdict these also mean "do not trust this From" - most
-# domains (the owner's own included) publish DMARC p=none, so spoofed
-# "from yourself" extortion spam never gets a DMARC policy symbol.
-ALLOW_DISTRUST_SYMBOLS = DMARC_SPOOF_SYMBOLS | frozenset({
-    "R_SPF_FAIL", "R_SPF_SOFTFAIL", "TH_PROVIDER_SPAM",
-    # 2.2 (B7): an aged scan turns rspamd's DMARC/SPF off; the provider's
-    # own verdict at delivery keeps distrusting the From: dmarc=fail
-    # (TH_PROVIDER_AUTH_FAIL; p=none -> TH_PROVIDER_AUTH_SPOOF) and
-    # spf=fail/softfail without an aligned DKIM pass (TH_PROVIDER_AUTH_SPOOF).
-    # TH_AGED_UNVERIFIED: aged scan with no provider SPF/DMARC verdict and no
-    # aligned DKIM signature - nothing proves the From (see _decide).
-    "TH_PROVIDER_AUTH_FAIL", "TH_PROVIDER_AUTH_SPOOF", "TH_AGED_UNVERIFIED"})
+DMARC_SPOOF_SYMBOLS = decisionpolicy.DMARC_SPOOF_SYMBOLS
+ALLOW_DISTRUST_SYMBOLS = decisionpolicy.ALLOW_DISTRUST_SYMBOLS
 
 STAT_METRICS = frozenset({
     "scanned", "spam_detected", "moved", "flagged", "released", "marked_spam",
@@ -1714,15 +1703,7 @@ def match_sender_rule(conn: sqlite3.Connection, account: str,
     return max(rows, key=rank)
 
 
-def rule_is_force(rule: Any) -> bool:
-    """True for an allow rule marked 'Altid igennem' (never moved, not even
-    when the From looks forged)."""
-    if rule is None:
-        return False
-    try:
-        return rule["kind"] == "allow" and bool(rule["force"])
-    except (IndexError, KeyError):  # row from before the column existed
-        return False
+rule_is_force = decisionpolicy.rule_is_force
 
 
 def add_sender_rule(conn: sqlite3.Connection, account: str, pattern: str, kind: str,
@@ -3982,20 +3963,8 @@ class _InboxMeta:
     raw: bytes | None = None
 
 
-@dataclass
-class Decision:
-    spam: bool                  # act on it (how depends on the mode)
-    action: str | None          # our_action when not acting
-    rule_hit: str | None = None
-    rule_id: int | None = None
-    note: str = ""
-    verdict: str | None = None  # user verdict implied by the mail (e.g. $NotJunk)
-    symbols: list = field(default_factory=list)   # 2.1: pseudo-symbols to store (score 0)
-    events: list = field(default_factory=list)    # 2.1: (event, detail) to log
-
-
-def _sticky_ham(row: sqlite3.Row | None) -> bool:
-    return row is not None and (row["user_verdict"] == "ham" or row["our_action"] in STICKY_HAM_ACTIONS)
+Decision = decisionpolicy.Decision
+_sticky_ham = decisionpolicy.sticky_ham
 
 
 def _spam_folders(fmap: dict[str, str]) -> list[str]:
@@ -4443,124 +4412,27 @@ def _classify_inbox_uid(client: IMAPClient, db: Db, log: logging.Logger, acc: Ac
                       msgid=msgid, prior=prior, raw=raw)
 
 
-def _rule_domain(rule: Any) -> str:
-    return str(rule["pattern"] or "").partition("@")[2].lower()
-
-
-def _domain_under(host: str | None, domain: str) -> bool:
-    h = (host or "").strip().lower().rstrip(".")
-    return bool(h) and bool(domain) and (h == domain or h.endswith("." + domain))
-
-
-def parse_sender_auth(value: Any) -> dict[str, Any]:
-    """messages.sender_auth JSON -> {"dkim": [domains], "host": str|None}."""
-    if isinstance(value, dict):
-        data = value
-    else:
-        try:
-            data = json.loads(value) if value else {}
-        except (TypeError, ValueError):
-            data = {}
-    if not isinstance(data, dict):
-        data = {}
-    dkim = [str(d).lower() for d in (data.get("dkim") or []) if d][:20]
-    host = data.get("host")
-    return {"dkim": dkim, "host": str(host).lower() if host else None}
-
-
-def force_verification(rule: Any, auth: dict[str, Any] | None) -> str | None:
-    """E8: how an 'Altid igennem' rule's domain is verified for this mail:
-    'dkim:<d>' (R_DKIM_ALLOW for the domain or a subdomain), 'host:<h>'
-    (the verified sending host lies under the domain, e.g. a shop
-    platform's mail-sender-N host behind its own forwarder), else None."""
-    if rule is None:
-        return None
-    dom = _rule_domain(rule)
-    a = parse_sender_auth(auth)
-    for d in a["dkim"]:
-        if _domain_under(d, dom):
-            return f"dkim:{d}"
-    if _domain_under(a["host"], dom):
-        return f"host:{a['host']}"
-    return None
+_rule_domain = decisionpolicy._rule_domain
+_domain_under = decisionpolicy._domain_under
+parse_sender_auth = decisionpolicy.parse_sender_auth
+force_verification = decisionpolicy.force_verification
 
 
 def _decide(db: Db, acc: Account, prior: sqlite3.Row | None, sender_addr: str | None,
             final: float, names: frozenset, flags: set[str], *, from_header: bool = True,
             threshold: float | None = None, auth: dict[str, Any] | None = None,
             aged_unverified: bool = False, threat: str | None = None) -> Decision:
-    """Spam decision after scoring: sticky verdicts, sender rules
-    (allow unless the From looks forged; 'Altid igennem' allow always when
-    the mail verifiably comes from the rule's domain; block regardless of
-    score). from_header=False: sender_addr is only the envelope sender (no
-    From address) - an 'Altid igennem' rule then acts as a normal allow
-    rule, see force_allow_rule. `threshold` = effective threshold (E9).
-    aged_unverified (2.2 B7): an aged scan (SPF/DMARC off) where neither the
-    provider's delivery-time SPF/DMARC verdict nor an aligned DKIM signature
-    vouches for the From - a normal allow rule is then not trusted
-    (TH_AGED_UNVERIFIED), like R_SPF_FAIL would in a fresh scan.
-    threat (2.3 B16): 'virus' is spam regardless of threshold, allow and
-    'Altid igennem' rules (known contacts / protected recipients cannot
-    help either). The other classes override normal allow rules and the
-    threshold; only an 'Altid igennem' rule verified by DKIM still passes,
-    logged as threat_force_pass."""
-    thr = acc.threshold if threshold is None else threshold
-    over = final >= thr
-    if _sticky_ham(prior):
-        return Decision(False, prior["our_action"] or "none", note="sticky ham verdict")
-    if threat == "virus":
-        return Decision(True, None, note="threat virus")
-    rule = match_sender_rule(db.conn, acc.name, sender_addr) if sender_addr else None
-    if rule is not None and rule["kind"] == "block":
-        return Decision(True, None, rule_hit=f"block:{rule['id']}", rule_id=int(rule["id"]),
-                        note="block rule")
-    if threat:
-        if (rule is not None and threat in THREAT_FORCE_PASSABLE and rule_is_force(rule) and from_header):
-            how = force_verification(rule, auth)
-            if how is not None and how.startswith("dkim:"):
-                return Decision(False, "allowlisted", rule_hit=f"allow:{rule['id']}", rule_id=int(rule["id"]),
-                                note=f"force allow rule ({how}) despite threat {threat}",
-                                events=[("threat_force_pass", f"{threat} rule={rule['id']} {how}")])
-        ignored = f" (allow rule {rule['id']} ignored)" if rule is not None and rule["kind"] == "allow" else ""
-        return Decision(True, None, note=f"threat {threat}{ignored}")
-    extra_syms: list[dict] = []
-    extra_events: list[tuple[str, str]] = []
-    unverified_note = ""
-    if rule is not None and rule["kind"] == "allow":
-        distrust = names & ALLOW_DISTRUST_SYMBOLS
-        if aged_unverified and "TH_AGED_UNVERIFIED" not in distrust:
-            distrust = distrust | {"TH_AGED_UNVERIFIED"}
-        if rule_is_force(rule) and from_header:
-            how = force_verification(rule, auth)
-            if how is not None:
-                # 'Altid igennem': the owner vouches for this sender (e.g. their
-                # own webshop platform, forwarded with SRS and sometimes released
-                # from the provider's quarantine with a broken DKIM signature)
-                # and the mail verifiably comes from that domain. Never flagged
-                # or moved - not by score, not by spoof symbols.
-                return Decision(False, "allowlisted", rule_hit=f"allow:{rule['id']}", rule_id=int(rule["id"]),
-                                note=f"force allow rule ({how})" + (f" (ignored {','.join(sorted(distrust))})"
-                                                                    if distrust else ""))
-            # Spoof guard (E8): the From claims the domain, but neither DKIM
-            # nor the sending path proves it - a normal allow rule.
-            extra_syms.append({"n": "TH_FORCE_UNVERIFIED", "s": 0.0, "o": [str(rule["pattern"])[:120]]})
-            extra_events.append(("force_unverified", f"rule={rule['id']} {rule['pattern']}"))
-            unverified_note = "force_unverified; "
-        if distrust:
-            # A forged From of an allowed sender must not bypass the filter:
-            # decide by score like any other mail.
-            if "TH_AGED_UNVERIFIED" in distrust and "TH_AGED_UNVERIFIED" not in names:
-                extra_syms.append({"n": "TH_AGED_UNVERIFIED", "s": 0.0,
-                                   "o": ["ingen udbyder-godkendelse", "ingen DKIM-signatur"]})
-            return Decision(over, None if over else "none",
-                            note=f"{unverified_note}allow rule ignored: {','.join(sorted(distrust))}",
-                            symbols=extra_syms, events=extra_events)
-        return Decision(False, "allowlisted" if over else "none",
-                        rule_hit=f"allow:{rule['id']}", rule_id=int(rule["id"]),
-                        note=f"{unverified_note}allow rule", symbols=extra_syms, events=extra_events)
-    if prior is not None and prior["user_verdict"] == "spam":
-        return Decision(True, None, note="user verdict spam")
-    return Decision(over, None if over else "none")
+    """Resolve the current account rule; apply the shared, pure policy.
+
+    Flags are handled by the scan/move guards before this existing entry point.
+    Avoid a rule lookup for sticky verdicts and viruses as before.
+    """
+    rule = (match_sender_rule(db.conn, acc.name, sender_addr)
+            if sender_addr and not _sticky_ham(prior) and threat != "virus" else None)
+    return decisionpolicy.decide(prior, rule, final, names,
+                                 threshold=acc.threshold if threshold is None else threshold,
+                                 from_header=from_header, auth=auth,
+                                 aged_unverified=aged_unverified, threat=threat)
 
 
 def effective_threshold(acc: Account, ctx: dict[str, Any] | None) -> tuple[float, str | None]:
@@ -4839,7 +4711,7 @@ THREAT_ORDER = (("virus", THREAT_VIRUS), ("phish", THREAT_PHISH), ("malware_url"
 THREAT_CLASSES = ("virus", "phish", "malware_url", "attachment", "impersonation", "lookalike")
 # Classes that still let a DKIM-verified 'Altid igennem' sender through
 # (logged as threat_force_pass). Virus never passes.
-THREAT_FORCE_PASSABLE = frozenset({"phish", "malware_url", "attachment", "impersonation", "lookalike"})
+THREAT_FORCE_PASSABLE = decisionpolicy.THREAT_FORCE_PASSABLE
 THREAT_LABELS = {"virus": "Virus", "phish": "Phishing-link", "malware_url": "Malware-link",
                  "attachment": "Farlig vedhæftning", "impersonation": "Forfalsket afsender",
                  "lookalike": "Efterligner jeres domæne"}

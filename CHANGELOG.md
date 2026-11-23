@@ -1,5 +1,16 @@
 # Ændringslog
 
+## Under udvikling efter 2.15.0-beta
+
+- `sfctl quality-compare` sammenligner baseline og kandidat på samme lokale,
+  menneskeligt mærkede udvalg. Viser nye/rettede fejl og valgt fejlomkostning
+  pr. postkasse; afviser ændrede labels og udvalg. Rapporten gælder kun prøven
+  og aktiverer ingen ændringer.
+- Den fælles første-scannings-/flyttepolitik er udskilt i `decisionpolicy.py`
+  med politikversion og stabile afgørelsesgrunde. Den eksisterende prioritering
+  og motorens indgange er bevaret. Dette er første del af udskillelsen.
+- Udviklingsændringerne indgår ikke i det allerede udgivne 2.15.0-arkiv.
+
 ## 2.15.0 — 2026-11-23 (beta)
 
 - Mappeobservationer uden hentbart indhold ændrer ingen eksisterende afgørelser og udløser ingen læring, heller ikke ved genbrugte ID'er. De tælles særskilt under Drift.

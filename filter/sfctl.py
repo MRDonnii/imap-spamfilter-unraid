@@ -1889,6 +1889,20 @@ def cmd_quality_evaluate(args):
     return EXIT_OK
 
 
+def cmd_quality_compare(args):
+    import quality
+    try:
+        result = quality.compare(quality.read_dataset(Path(args.baseline)),
+                                 quality.read_dataset(Path(args.candidate)),
+                                 false_positive_cost=args.false_positive_cost,
+                                 min_per_class=args.min_per_class)
+    except (ValueError, OSError) as ex:
+        raise CliError("Sammenligning afvist: " + str(ex)) from None
+    out(json.dumps(result, ensure_ascii=False, indent=2))
+    # Success means valid evaluation, not an installation/activation decision.
+    return EXIT_OK
+
+
 def cmd_quality_export(args):
     import quality
     with sqlite3.connect(ui.DB_PATH) as conn:
@@ -2358,6 +2372,13 @@ def build_parser() -> argparse.ArgumentParser:
     add("push-reset", "nødstop: fjern alle enheder med beskeder og lav en ny nøgle (VAPID)", cmd_push_reset)
     p = add("quality-evaluate", "evaluér et lokalt mærket holdout-sæt uden træning", cmd_quality_evaluate)
     p.add_argument("file", help="lokal JSONL-fil; se CONFIGURATION.md")
+    p = add("quality-compare", "sammenlign baseline/kandidat på samme lokale prøveudvalg", cmd_quality_compare)
+    p.add_argument("baseline", help="lokal JSONL-fil med oprindelige afgørelser")
+    p.add_argument("candidate", help="lokal JSONL-fil med kandidatens afgørelser på samme mails")
+    p.add_argument("--false-positive-cost", type=int, default=10,
+                   help="pris for fanget rigtig post relativt til overset spam (standard 10)")
+    p.add_argument("--min-per-class", type=int, default=20,
+                   help="mindst så mange ham og spam pr. postkasse (standard 20; ingen statistisk garanti)")
     p = add("quality-export", "eksportér eksplicitte brugerafgørelser lokalt (metadata, ingen mailtekst)", cmd_quality_export)
     p.add_argument("--to", required=True, help="ny fil; oprettes med mode 0600")
     p = add("backup-now", "lav en krypteret backup nu (ellers hver nat fra kl. 02:30)", cmd_backup_now)

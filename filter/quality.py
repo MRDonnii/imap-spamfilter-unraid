@@ -4,6 +4,7 @@ Coverage is event counts, not a percentage of all delivered mail: read mail,
 provider junk and rescans do not share a reliable delivery denominator.
 Evaluation reports ONLY the supplied, human-labelled sample, per mailbox.
 """
+import hashlib
 import json
 import math
 from collections import defaultdict
@@ -104,3 +105,82 @@ def read_dataset(path):
         raise ValueError('Datasættet må højst være 10 MiB.')
     with path.open() as f:
         return [json.loads(line) for line in f if line.strip()]
+
+
+def _digest(rows):
+    """Stable evidence identifier; never include mail IDs in a comparison report."""
+    return hashlib.sha256(json.dumps(rows, sort_keys=True, ensure_ascii=True,
+                                     separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+
+
+def compare(baseline, candidate, *, false_positive_cost=10, min_per_class=20):
+    """Compare paired, human-labelled predictions. No training or activation.
+
+    A gate is descriptive of this sample only, never deployment approval.
+    The minimum is a configurable operational floor, not statistical power.
+    Unknown training provenance and correction bias remain explicit limitations.
+    """
+    if (isinstance(false_positive_cost, bool) or not isinstance(false_positive_cost, int)
+            or not 1 <= false_positive_cost <= 1_000_000):
+        raise ValueError('Prisen for en falsk positiv skal være et heltal fra 1 til 1000000.')
+    if (isinstance(min_per_class, bool) or not isinstance(min_per_class, int)
+            or not 1 <= min_per_class <= 1_000_000):
+        raise ValueError('Mindste antal pr. klasse skal være et heltal fra 1 til 1000000.')
+    baseline, candidate = list(baseline), list(candidate)
+    # Reuse all input checks, including duplicate train/holdout identities.
+    before, after = evaluate(baseline), evaluate(candidate)
+    left = {(r['account'], r['id']): r for r in baseline}
+    right = {(r['account'], r['id']): r for r in candidate}
+    if left.keys() != right.keys():
+        raise ValueError('Baseline og kandidat skal indeholde præcis de samme konto/ID-par.')
+    cohort, evidence = [], [[], []]
+    transitions = defaultdict(lambda: dict(new_false_positives=0, fixed_false_positives=0,
+                                          new_false_negatives=0, fixed_false_negatives=0))
+    for key in sorted(left):
+        a, b = left[key], right[key]
+        for field in ('label', 'split', 'basis', 'selection'):
+            if a.get(field) != b.get(field):
+                raise ValueError(f'Baseline og kandidat har forskelligt {field}; sammenligningen afvises.')
+        if a['split'] == 'train':
+            continue
+        cohort.append([*key, a['label'], a.get('basis'), a.get('selection')])
+        predictions = []
+        for index, r in enumerate((a, b)):
+            prediction = r.get('prediction', 'spam' if r['score'] >= r['threshold'] else 'ham')
+            predictions.append(prediction)
+            evidence[index].append([*key, prediction, float(r['score']), float(r['threshold']),
+                                    str(r.get('version') or 'ukendt')])
+        previous, current = predictions
+        t = transitions[key[0]]
+        if previous != current:
+            if a['label'] == 'ham':
+                t['new_false_positives' if current == 'spam' else 'fixed_false_positives'] += 1
+            else:
+                t['new_false_negatives' if current == 'ham' else 'fixed_false_negatives'] += 1
+    before_accounts = {g['account']: g for g in before['accounts']}
+    accounts = []
+    for current in after['accounts']:
+        account = current['account']
+        previous, t = before_accounts[account], transitions[account]
+        ham, spam = current['tn'] + current['fp'], current['tp'] + current['fn']
+        enough = ham >= min_per_class and spam >= min_per_class
+        regression = bool(t['new_false_positives'] or current['fn'] > previous['fn'])
+        old_cost = previous['fp'] * false_positive_cost + previous['fn']
+        new_cost = current['fp'] * false_positive_cost + current['fn']
+        accounts.append(dict(account=account, baseline=previous, candidate=current,
+                             changes=t, ham_size=ham, spam_size=spam,
+                             sufficient_sample=enough, baseline_cost=old_cost,
+                             candidate_cost=new_cost, cost_delta=new_cost-old_cost,
+                             status=('regression_in_sample' if regression else
+                                     'no_regression_in_sample' if enough else 'insufficient_sample')))
+    statuses = {g['status'] for g in accounts}
+    status = ('regression_in_sample' if 'regression_in_sample' in statuses else
+              'insufficient_sample' if not accounts or 'insufficient_sample' in statuses else
+              'no_regression_in_sample')
+    return dict(schema_version=1, basis='paired_holdout_only', status=status,
+                holdout_size=len(cohort), cohort_sha256=_digest(cohort),
+                baseline_sha256=_digest(evidence[0]), candidate_sha256=_digest(evidence[1]),
+                false_positive_cost=false_positive_cost, false_negative_cost=1,
+                min_per_class=min_per_class, accounts=accounts, automatic_activation=False,
+                warning='Kun det leverede prøveudvalg. Ingen dokumentation for samlet træfsikkerhed, '
+                        'uafhængigt holdout eller fravær af træningslækage. Ingen træning eller aktivering.')

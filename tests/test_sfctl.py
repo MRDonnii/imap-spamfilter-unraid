@@ -140,6 +140,40 @@ def enroll_2fa(name: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_quality_compare_is_read_only_and_reports_sample_regression(env, capsys, monkeypatch):
+    baseline = env.state / 'baseline.jsonl'
+    candidate = env.state / 'candidate.jsonl'
+    rows = [dict(account='sample-a', id='private-id', split='holdout', label='ham',
+                 prediction='ham', score=0, threshold=8),
+            dict(account='sample-a', id='sample-spam', split='holdout', label='spam',
+                 prediction='spam', score=10, threshold=8)]
+    baseline.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+    candidate.write_text(''.join(json.dumps(dict(r, prediction='spam')) + '\n' for r in rows))
+    before_db = env.db.read_bytes()
+    original = baseline.read_bytes(), candidate.read_bytes()
+    monkeypatch.setattr(engine, 'connect', lambda *a, **kw: pytest.fail('evaluation must not contact IMAP'))
+    code, out, err = run(capsys, monkeypatch, 'quality-compare', str(baseline), str(candidate),
+                         '--min-per-class', '1', '--false-positive-cost', '15')
+    assert code == 0 and not err
+    result = json.loads(out)
+    assert result['status'] == 'regression_in_sample'
+    assert result['accounts'][0]['cost_delta'] == 15
+    assert 'private-id' not in out
+    assert env.db.read_bytes() == before_db
+    assert (baseline.read_bytes(), candidate.read_bytes()) == original
+    assert audit_records(env) == []
+
+
+def test_quality_compare_rejects_changed_labels(env, capsys, monkeypatch):
+    a, b = env.state / 'a.jsonl', env.state / 'b.jsonl'
+    sample = dict(account='a', id='private-id', split='holdout', label='ham', score=0, threshold=8)
+    a.write_text(json.dumps(sample) + '\n')
+    b.write_text(json.dumps(dict(sample, label='spam')) + '\n')
+    code, out, err = run(capsys, monkeypatch, 'quality-compare', str(a), str(b))
+    assert code != 0 and not out and 'label' in err
+    assert 'private-id' not in err
+
+
 def test_status(env, capsys, monkeypatch):
     (env.state / "heartbeat").write_text(f"{int(__import__('time').time()) - 5} boot\n")
     dashboard.settings_set("external_url", "https://spam.example.dk")

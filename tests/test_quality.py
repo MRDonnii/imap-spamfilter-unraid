@@ -79,3 +79,90 @@ def test_export_is_scoped_metadata_and_preserves_first_observation():
         assert quality.evaluate(rows)['accounts'][0]['fp'] == 1
     finally:
         conn.close()
+
+
+def test_paired_comparison_keeps_mailboxes_separate_and_detects_new_false_positive():
+    baseline = [row('private-id-a', 'ham', 1), row('spam-a', 'spam', 10),
+                dict(row('ham-b', 'ham', 10), account='mailbox-b'),
+                dict(row('spam-b', 'spam', 1), account='mailbox-b')]
+    candidate = [dict(r, score=10) if r['id'] == 'private-id-a' else
+                 dict(r, score=1) if r['id'] == 'ham-b' else
+                 dict(r, score=10) if r['id'] == 'spam-b' else dict(r) for r in baseline]
+    result = quality.compare(baseline, candidate, min_per_class=1)
+    a, b = result['accounts']
+    assert result['status'] == a['status'] == 'regression_in_sample'
+    assert b['status'] == 'no_regression_in_sample'
+    assert a['cost_delta'] == 10 and b['cost_delta'] == -11
+    assert a['changes']['new_false_positives'] == 1
+    assert b['changes']['fixed_false_positives'] == b['changes']['fixed_false_negatives'] == 1
+    assert result['automatic_activation'] is False
+    assert 'private-id-a' not in json.dumps(result)
+    assert quality.compare(baseline[::-1], candidate[::-1], min_per_class=1) == result
+
+
+def test_same_error_count_cannot_hide_a_new_false_positive():
+    baseline = [row('old-fp', 'ham', 10), row('new-fp', 'ham', 1)]
+    candidate = [dict(baseline[0], score=1), dict(baseline[1], score=10)]
+    result = quality.compare(baseline, candidate, min_per_class=1)
+    account = result['accounts'][0]
+    assert account['cost_delta'] == 0
+    assert account['changes']['new_false_positives'] == 1
+    assert result['status'] == 'regression_in_sample'
+
+
+def test_comparison_exposes_more_missed_spam_and_keeps_explicit_rule_decisions():
+    baseline = [row('spam', 'spam', 10), row('allowed', 'ham', 20, prediction='ham')]
+    candidate = [dict(baseline[0], prediction='ham'), baseline[1]]
+    result = quality.compare(baseline, candidate, min_per_class=1)
+    account = result['accounts'][0]
+    assert account['changes']['new_false_negatives'] == 1
+    assert account['candidate']['fp'] == 0
+    assert account['candidate_cost'] == 1
+    assert result['status'] == 'regression_in_sample'
+
+
+@pytest.mark.parametrize('field,value', [('label', 'spam'), ('split', 'train'),
+                                      ('basis', 'after_ai'), ('selection', 'different')])
+def test_comparison_rejects_changed_ground_truth_or_measurement_basis(field, value):
+    baseline = [row('one', 'ham', 1)]
+    with pytest.raises(ValueError, match=field):
+        quality.compare(baseline, [dict(baseline[0], **{field: value})])
+
+
+def test_comparison_rejects_missing_or_duplicate_mail_without_printing_ids():
+    baseline = [row('sensitive-id', 'ham', 1)]
+    with pytest.raises(ValueError, match='samme konto/ID') as ex:
+        quality.compare(baseline, [])
+    assert 'sensitive-id' not in str(ex.value)
+    with pytest.raises(ValueError, match='overlappe'):
+        quality.compare(baseline, baseline * 2)
+
+
+def test_sample_floor_empty_input_and_provenance_are_explicit():
+    sample = [row('h', 'ham', 1), row('s', 'spam', 10)]
+    result = quality.compare(sample, sample)
+    assert result['status'] == 'insufficient_sample'
+    assert not result['accounts'][0]['sufficient_sample']
+    assert quality.compare([], [])['status'] == 'insufficient_sample'
+    assert 'træningslækage' in result['warning']
+    assert quality.compare(sample, sample, min_per_class=1)['status'] == 'no_regression_in_sample'
+
+
+def test_comparison_hashes_distinguish_cohort_and_predictions_excluding_train():
+    sample = [row('h', 'ham', 1), row('s', 'spam', 10),
+              dict(row('train', 'spam', 10), split='train')]
+    changed = [dict(sample[0], score=2, version='candidate'), sample[1],
+               dict(sample[2], score=30)]
+    result = quality.compare(sample, changed)
+    assert result['holdout_size'] == 2
+    assert len(result['cohort_sha256']) == 64
+    assert result['baseline_sha256'] != result['candidate_sha256']
+    assert result['cohort_sha256'] == quality.compare(sample[:2], changed[:2])['cohort_sha256']
+
+
+@pytest.mark.parametrize('options', [{'false_positive_cost': True}, {'false_positive_cost': 0},
+                                   {'false_positive_cost': 1.5}, {'min_per_class': 0},
+                                   {'min_per_class': False}, {'min_per_class': 1_000_001}])
+def test_comparison_rejects_invalid_cost_or_floor(options):
+    with pytest.raises(ValueError):
+        quality.compare([], [], **options)

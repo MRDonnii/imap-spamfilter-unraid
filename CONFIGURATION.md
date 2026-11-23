@@ -427,3 +427,58 @@ Hver linje er et JSON-objekt, eksempel:
 `label` er menneskets vurdering (`ham`/`spam`). `prediction` er filterbeslutningen inklusive regler; udelades den ved manuel import, bruges score >= threshold. Brug `split=train` for træningsmateriale og `split=holdout` for særskilt prøvemateriale. Identiske konto/ID-par, også på tværs af split, afvises. `train` tæller ikke med; værktøjet træner aldrig, kontakter ikke IMAP og flytter ingen mail. Maksimal inputfil er 10 MiB.
 
 Resultatet viser TP/TN/FP/FN, precision, recall, falsk-positiv-rate, falsk-negativ-rate og prøvestørrelse pr. postkasse. Manglende nævnere giver `null`. Eksport af brugerrettelser er et **skævt udvalgt prøveudvalg** og ikke dokumentation for samlet træfsikkerhed eller et uafhængigt holdout. For en reel før/efter-måling skal ejeren udtage og menneskeligt mærke et repræsentativt, på forhånd reserveret udvalg, holde det ude af al træning og bruge samme scorergrundlag. Familiepost er ikke testet eller uploadet med denne udgivelse.
+
+### Sammenlign baseline og kandidat (under udvikling)
+
+Den næste udviklingsversion tilføjer en parret sammenligning. Den indgår ikke i
+den oprindeligt publicerede 2.15.0-beta fra commit `108134d`.
+
+```sh
+docker exec spamfilter sfctl quality-compare /state/baseline.jsonl /state/candidate.jsonl
+```
+
+Begge filer følger JSONL-formatet ovenfor. Brug præcis de samme mails og
+menneskelige labels. Kandidatens `score`, `threshold`, `prediction` og `version`
+kommer fra en separat, kontrolleret afprøvning. Kommandoen kører ikke en kandidat
+eller genscanner mails. Angiv `prediction`, når regler indgår i afgørelsen;
+ellers bruges alene scoregrænsen.
+
+Ændrede konto/ID-par, labels, train/holdout-placering, `basis` eller `selection`
+afvises. Træningsrækker tælles ikke med. Rapporten viser før/efter pr. postkasse,
+nye og rettede falske positiver/negativer samt SHA-256 for holdout-udvalget og
+hver sides afgørelser. Rapporten indeholder ingen mail-ID'er, men kontonavne
+kan stadig være personoplysninger. Hold både input og rapport lokalt.
+
+En fanget rigtig mail vægtes som standard til 10 og en overset spam til 1.
+`--false-positive-cost N` ændrer denne prioritering, ikke filterets regler.
+Prisen er en valgt vægt, ikke en målt økonomisk omkostning.
+
+`status` betyder:
+
+- `regression_in_sample`: mindst én ny falsk positiv eller flere falske
+  negativer i en postkasse. Rettelser i andre postkasser skjuler ikke problemet.
+  En ny falsk positiv tæller også, når en anden falsk positiv samtidig rettes.
+- `insufficient_sample`: ingen sådan tilbagegang fundet, men en postkasse
+  mangler mindst 20 ham og 20 spam, eller holdout er tomt.
+- `no_regression_in_sample`: ingen sådan tilbagegang i det leverede udvalg,
+  og alle postkasser opfylder minimum. Nye og rettede falske negativer vises
+  stadig hver for sig, også når det samlede antal er uændret.
+
+`--min-per-class N` ændrer minimum. Grænsen er en praktisk datamængdekontrol,
+**ingen statistisk garanti**. Resultatet beviser hverken repræsentativitet,
+fravær af træningslækage eller en forbedring på fremtidig post. Eksport af
+brugerrettelser beholder sin selektionsbias. Intet aktiveres automatisk.
+CLI-exitkode 0 betyder, at sammenligningen kunne udføres; læs `status` i JSON,
+hvis rapporten bruges i et script.
+
+### Beslutningspolitik (under udvikling)
+
+`decisionpolicy.py` samler den eksisterende prioritering for første scanning og
+genkontrol før ventende flytninger i en ren funktion uden SQL, netværk eller
+læring. Motoren vælger fortsat den aktuelle kontos afsenderregel og kontrollerer
+mailidentitet og flag omkring kaldet. Resultatet har `policy_version=1` og en
+stabil `reason`, fx `virus`, `sender_block`, `allow_distrusted` eller `score`.
+Disse felter er foreløbig runtime-metadata; der gemmes endnu ikke en komplet
+beslutningshistorik. Asynkrone AI-, kampagne- og ZAP-forløb er ikke alle samlet
+under denne grænse. Udskillelsen ændrer ikke beslutningsrækkefølgen, herunder
+at en allerede eksplicit frigivet mail bevarer sin sticky brugerafgørelse.
