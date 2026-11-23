@@ -30,6 +30,11 @@ def fingerprint(raw: bytes) -> str:
     stable = []
     for field in fields:
         name, colon, value = field.partition(b':')
+        if not colon or not re.fullmatch(rb'[!-9;-~]+', name):
+            # A malformed header block may already contain body text.
+            # Hash all bytes conservatively: never lowercase that text or
+            # discard a body line merely because it resembles Received.
+            return hashlib.sha256(data).hexdigest()
         if name.decode('ascii', 'replace').lower() not in TRANSPORT:
             stable.append(name.lower() + colon + value)
     return hashlib.sha256(b'\n'.join(stable) + b'\n\n' + body).hexdigest()

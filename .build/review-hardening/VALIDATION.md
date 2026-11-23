@@ -16,3 +16,6 @@ Limitations: no live IMAP/SMTP/server acceptance; no human-labelled family datas
 
 
 A subsequent full local run passed 4005 tests with 7 skips. A final adversarial regression then demonstrated that an oversized junk-folder arrival reusing an existing released ID could still overwrite its verdict when no body was fetched. Junk observation now requires content before recording a verdict or learning; unavailable bodies are counted separately. Oversize and missing-body collisions are covered on both UIDPLUS and MOVE. Final whole-suite results for this additional guard are in the release notes and exact-commit CI linked above.
+
+
+Malformed/headerless message regressions also failed before the final fingerprint guard: lowercasing a non-header line or ignoring a Received-like line could otherwise discard meaningful body differences. Invalid header blocks now fall back to hashing the entire normalized raw message; valid transport changes still preserve identity and body case remains significant. These negative/positive cases pass before the final CI run.

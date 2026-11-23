@@ -174,3 +174,18 @@ def test_unverified_junk_collision_cannot_change_existing_release(eng, monkeypat
     assert h.row('released-size@x')['our_action'] == 'manual_release'
     assert h.rspamd.learn_calls == []
     assert h.events('junk_identity_unverified')
+
+
+@pytest.mark.parametrize('raw,changed', [
+    (b'Original Case', b'original case'),
+    (b'From: sender@example.org\nnot a header\nReceived: original payload\n\nTail',
+     b'From: sender@example.org\nnot a header\nReceived: changed payload\n\nTail'),
+])
+def test_malformed_mail_body_cannot_be_normalized_as_transport_headers(eng, raw, changed):
+    assert eng.mailidentity.fingerprint(raw) != eng.mailidentity.fingerprint(changed)
+
+
+def test_valid_transport_changes_preserve_identity_but_body_case_does_not(eng):
+    raw = b'Received: relay-a\r\nFrom: sender@example.org\r\nSubject: Hello\r\n\r\nCase Sensitive Body'
+    assert eng.mailidentity.fingerprint(raw) == eng.mailidentity.fingerprint(raw.replace(b'relay-a', b'relay-b'))
+    assert eng.mailidentity.fingerprint(raw) != eng.mailidentity.fingerprint(raw.replace(b'Case', b'case'))

@@ -232,7 +232,7 @@ Exitkoder: 0 = ok, 1 = fejl eller afvist, 2 = forkert brug.
 
 ## Mailidentitet og opgradering fra 2.14 (2.15)
 
-Message-ID kommer fra afsenderen og er ikke en tillidsgrænse. Tabellen `mail_identity` knytter postkasse, intern nøgle, oprindeligt ID og SHA-256 af mailens stabile headere og MIME-indhold sammen. Leveringsheadere (fx Received, DKIM-signatur og Authentication-Results) og CRLF/LF normaliseres; afsender, emne, applikationsmarkører og body er bundet. Mailen ændres ikke. Manglende, usikre, reserverede eller genbrugte ID'er får en intern `sf-local:`-nøgle. Opslag og mailhandlinger kontrollerer indholdet før brug af denne binding.
+Message-ID kommer fra afsenderen og er ikke en tillidsgrænse. Tabellen `mail_identity` knytter postkasse, intern nøgle, oprindeligt ID og SHA-256 af mailens stabile headere og MIME-indhold sammen. Leveringsheadere (fx Received, DKIM-signatur og Authentication-Results) og CRLF/LF normaliseres; afsender, emne, applikationsmarkører og body er bundet. Ved fejlformede headere hashes hele den normaliserede rå mail konservativt, så bodytekst ikke forveksles med leveringsheadere. Mailen ændres ikke. Manglende, usikre, reserverede eller genbrugte ID'er får en intern `sf-local:`-nøgle. Opslag og mailhandlinger kontrollerer indholdet før brug af denne binding.
 
 Gamle rækker uden fingerprint bevares. En ny indbakkelevering må ikke arve deres frigivelse ud fra header-ID alene; den får en særskilt identitet og normal kontrol. En gammel frigivet mail kan derfor skulle frigives igen efter genlevering. Egne kvitteringer og SMTP-notifikationer undtages kun med en binding til det faktisk genererede indhold.
 
