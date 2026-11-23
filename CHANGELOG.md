@@ -1,5 +1,19 @@
 # Ændringslog
 
+## 2.18.0 — 2026-11-23 (beta)
+
+- Ejerbestilt personlig spamautomatik: Tre nye rettelser af forskellige mails
+  fra samme bekræftede adresse inden for 30 dage kan blokere adressen for den
+  enkelte postkasse. Mailprogram og WebUI tælles samlet uden dubletklik.
+  Gamle forslag udløser ingen blokering ved opgradering. Højst fem nye regler
+  pr. konto pr. rullende døgn. Egne domæner og eksisterende tilladelser bevares.
+- **Husk gentagen spam automatisk** er som standard slået til og kan slås fra
+  pr. konto. Fra giver fortsat forslag; eksisterende regler bevares. Ingen
+  ændring af scoregrænser, ingen automatisk domæne-/globalregel eller sletning.
+- Frigivelse/legitim-afgørelse nulstiller tællegrundlaget og fortryder en
+  uændret automatisk blokering, også uden automatisk tilladelse. Håndlavede
+  regler bevares; en fortrudt automatisk blokering genskabes ikke af sig selv.
+
 ## 2.17.0 — 2026-11-23 (beta)
 
 - Forsinkede AI- og kampagneafgørelser bruger særskilte profiler i den fælles

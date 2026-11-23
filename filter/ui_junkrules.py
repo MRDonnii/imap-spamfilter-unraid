@@ -7,9 +7,9 @@ Administrators only. Shows the notes junkrules.py keeps:
     someone else's mailbox made). Buttons: "Fjern reglen", "Bloker for
     kontoen", "Ignorer".
   * suggest: three moves to Junk of the same (authenticated) sender in one
-    mailbox: "Bloker for kontoen" / "Ignorer". Only with junkrules.AUTO_BLOCK
-    (off by default) has the engine blocked it itself (shown with "Fjern
-    blokeringen").
+    mailbox: "Bloker for kontoen" / "Ignorer". With the account's approved
+    repeated-spam automation, three fresh corrections can block it directly
+    (shown with "Fjern blokeringen").
 
 Every action works on ONE mailbox and the exact address only. Nothing here
 moves or deletes mail: a rule only acts on mail that arrives later.

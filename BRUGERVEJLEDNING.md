@@ -223,11 +223,13 @@ Det virker i alle mailprogrammer: iPhone Mail, Outlook, Gmail-appen med IMAP, Th
 **Spam i indbakken?** Træk mailen over i mappen **Spamfilter**:
 
 - Filteret lærer, at den slags er spam.
-- Var afsenderen tidligere blevet tilladt automatisk (se nedenfor), fjernes den automatiske tilladelse igen. Regler, du selv har lavet, bliver ikke rørt, og der oprettes ingen blokering.
+- Var afsenderen tidligere blevet tilladt automatisk (se nedenfor), fjernes den automatiske tilladelse igen. Regler, du selv har lavet, bliver ikke rørt.
+- Fra 2.18 huskes gentagen spam: Tre nye rettelser af forskellige mails fra samme bekræftede adresse inden for 30 dage kan blokere adressen automatisk for netop din postkasse. Det gælder også **Flyt til spam** i WebUI. Gamle rettelser ved opgraderingen tæller ikke med. Du kan slå det fra under kontoens **Husk gentagen spam automatisk**; eksisterende regler fjernes særskilt under Regler/Tjek disse.
 
 **Rigtig mail i Spamfilter?** Træk den tilbage til **Indbakken**:
 
 - Filteret lærer, at den ikke er spam, og flytter aldrig den mail igen.
+- En blokering fra den nye gentagen-spam-automatik fjernes og tællegrundlaget nulstilles. En fortrudt automatisk blokering bliver ikke oprettet igen af sig selv; håndlavede regler bevares.
 - **Afsenderen bliver automatisk tilladt** for den postkasse (kun den præcise adresse). Den næste mail fra dem kommer altså også igennem.
 - Er afsenderen sat til **Altid igennem**, laves der ingen ekstra regel. Den regel gælder allerede.
 

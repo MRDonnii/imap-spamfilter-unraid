@@ -657,6 +657,12 @@ def _record_verdict(db: Any, eng: Any, acc: Any, mid: str, *, folder: str, verdi
         if retained_threat:
             db.conn.execute('UPDATE messages SET threat=?, threat_detail=? WHERE account=? AND message_id=?',
                             (retained_threat, retained_detail, acc.name, mid))
+        if verdict == 'ham':
+            undo_auto = getattr(eng, '_junk_rules_after_user_ham', None)
+            if undo_auto is not None:
+                saved = db.conn.execute('SELECT sender FROM messages WHERE account=? AND message_id=?',
+                                        (acc.name, mid)).fetchone()
+                undo_auto(db, log, acc, mid, saved[0] if saved else sender)
         db.log_event(event, mid, detail=f"actor={actor}" if actor else None)
     if stat:
         # Outside the transaction: bump_stat may manage its own commit.
@@ -779,6 +785,14 @@ def _do_mark_spam(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, A
                     our_action="manual_mark_spam", moved_to_junk=moved, learn_outcome=outcome,
                     raw=raw, stat="marked_spam", event="manual_mark_spam")
     _revoke_auto_allow(eng, db, acc, mid, raw)
+    # The same explicit correction in the WebUI and mail app must reach
+    # the same deduplicated, authenticated per-mailbox automation.
+    feedback = getattr(eng, '_junk_rules_after_user_junk', None)
+    if feedback is not None:
+        saved = db.conn.execute('SELECT sender FROM messages WHERE account=? AND message_id=?',
+                                (acc.name, mid)).fetchone()
+        with db.tx():
+            feedback(db, log, acc, mid, saved[0] if saved else None, explicit=True)
     if outcome != "newsletter":
         # A newsletter one person does not want is no campaign for the others.
         _campaign_after_spam(eng, db, acc, mid, raw, actor, "manual_mark_spam", outcome)

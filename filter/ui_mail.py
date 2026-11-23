@@ -130,7 +130,8 @@ EVENT_INFO: dict[str, tuple[str, str, str]] = {
     # 2.12 (#8/#9)
     "junk_rule_conflict": ("Flyttet til Junk, selv om afsenderen er tilladt – vises for administratoren",
                            "alert-triangle", "warn"),
-    "junk_auto_block": ("Afsenderen er blokeret for postkassen efter 3 flytninger til Junk", "ban", "warn"),
+    "junk_auto_block": ("Afsenderen er blokeret for postkassen efter gentagne spamrettelser", "ban", "warn"),
+    "junk_auto_block_removed": ("Automatisk spamblokering fjernet efter brugerens rettelse", "undo", "ok"),
     "junk_block_suggested": ("Forslag om at blokere afsenderen for postkassen", "ban", "info"),
     "learn_skip_newsletter": ("Ikke lært som spam – et almindeligt nyhedsbrev lærer ikke filteret noget",
                               "graduation-cap", "neutral"),

@@ -62,6 +62,7 @@ class AdminAccount:
     bayes_user: str | None = None
     training_folders: bool = False
     auto_allow_on_rescue: bool = True
+    auto_block_repeated_spam: bool = True
     known_contacts: bool = True
     threat_notice: bool = True
     newsletters: str = "shadow"           # 2.6 (A4)

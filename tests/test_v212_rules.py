@@ -134,11 +134,11 @@ def _rules(h):
     return [dict(r) for r in h.db.conn.execute("SELECT * FROM sender_rules ORDER BY id")]
 
 
-def test_third_move_to_junk_is_a_suggestion_only_by_default(eng, monkeypatch):
-    # Review 2.12: the owner has not approved automatic blocks (plan #9 and
-    # question 4: "efter OK") - the note waits for the admin.
+def test_third_move_to_junk_is_a_suggestion_when_automation_is_disabled(eng, monkeypatch):
+    # Disabling the owner-approved 2.18 automation keeps the earlier suggestion workflow.
     assert junkrules.AUTO_BLOCK is False
     h = _harness(eng, monkeypatch)
+    h.acc.auto_block_repeated_spam = False
     for i in range(3):
         _junk_one(h, f"q{i}@x")
     assert _rules(h) == [] and not h.events("junk_auto_block") and h.events("junk_block_suggested")

@@ -605,8 +605,9 @@ def test_auto_allow_events_have_danish_labels():
     import ui_admin
     import ui_mail
 
-    for ev in ("rule_auto_allow", "rule_auto_allow_removed", "rule_auto_allow_skipped"):
+    for ev in ("rule_auto_allow", "rule_auto_allow_removed", "rule_auto_allow_skipped", "junk_auto_block_removed"):
         assert ev in ui_admin.EVENT_LABELS and ev in ui_mail.EVENT_INFO
+        assert len(ui_admin.EVENT_LABELS[ev]) == 2 and len(ui_mail.EVENT_INFO[ev]) == 3
         assert "_" not in ui_admin.EVENT_LABELS[ev][0] and "_" not in ui_mail.EVENT_INFO[ev][0]
 
 
@@ -669,3 +670,20 @@ def test_drift_never_presents_stale_antivirus_health_as_working(env, monkeypatch
         'parts': {'clamav': {'state': 'ok', 'db_age_s': 100}}})
     html = body(client_for(env, 'admin').get('/system'))
     assert 'Ukendt – ingen frisk måling' in html
+
+
+def test_account_spam_automation_has_scoped_admin_switch_and_preserves_other_settings(env):
+    admin = client_for(env, 'admin')
+    html = body(admin.get('/accounts/bynet'))
+    assert 'Husk gentagen spam automatisk' in html
+    assert 'action="/accounts/bynet/auto-block"' in html
+    assert post(client_for(env, 'anna'), '/accounts/bynet/auto-block', {}).status_code == 403
+    before = dict(env.entry('bynet'))
+    response = post(admin, '/accounts/bynet/auto-block', {})
+    assert response.status_code == 200
+    after = dict(env.entry('bynet'))
+    assert after.pop('auto_block_repeated_spam') is False
+    assert after == before
+    assert any(a['action'] == 'account_auto_block' for a in audit(env))
+    assert post(admin, '/accounts/bynet/auto-block', {'auto_block_repeated_spam':'1'}).status_code == 200
+    assert env.entry('bynet')['auto_block_repeated_spam'] is True

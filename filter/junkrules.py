@@ -15,8 +15,8 @@ and shown to administrators under "Tjek disse" (Fanget spam):
   * ``suggest`` (#9): the user moved mail from the same sender to Junk
     ``BLOCK_AFTER`` (3) times in the same mailbox and no rule covers the
     sender. The note is a suggestion: the admin decides ("Bloker for
-    kontoen" or "Ignorer"). Only with ``AUTO_BLOCK`` (off by default; the
-    owner has not approved automatic blocks) does the engine make an
+    kontoen" or "Ignorer"). Since 2.18 the owner's approved per-account
+    ``auto_block_repeated_spam`` setting (default on) lets the engine make an
     exact-address block rule for that one mailbox at once (created_by
     ``auto:junk``). Existing mail is never touched: a rule only acts on
     mail that arrives later, and block rules move to the spam folder
@@ -30,6 +30,12 @@ Never for the owner's own domains: the same refusals as every block made in
 the WebUI (``block_refusal``): vexar.example, pinsikbing.example and gravisk.example
 always, every mailbox's platform/webshop domains, every mailbox's domain
 and every mailbox address across all accounts.
+
+Automatic rules require three NEW distinct corrections in 30 days while
+that setting is on, with at most five new rules per rolling day. Historical
+suggestions are never promoted in bulk. A rescue/ham verdict clears evidence
+and undoes only an unchanged automatic rule. The legacy helper's AUTO_BLOCK
+fallback remains off for older callers; the engine passes the account setting.
 
 Schema: additive (CREATE TABLE IF NOT EXISTS); older images ignore it.
 """
@@ -48,6 +54,8 @@ log = logging.getLogger("filter.junkrules")
 BLOCK_AFTER = 3              # moves to Junk of the same sender in one mailbox
 WINDOW_DAYS = 180            # moves older than this do not count
 AUTO_BLOCK = False           # suggestions only; True = the engine makes the block rule itself (#9)
+AUTO_WINDOW_DAYS = 30       # fresh explicit feedback; never backfill old suggestions
+MAX_AUTO_BLOCKS_PER_DAY = 5
 AUTO_BY = "auto:junk"        # created_by of an automatic block rule
 AUTO_ALLOW_BY = "auto:flytning"
 NOTE_TEXT = "Flyttet til Junk {n} gange af brugeren"
@@ -62,6 +70,10 @@ STATUSES = ("open", "auto_blocked", "blocked", "rule_removed", "dismissed", "und
 RECENT_DAYS = 14             # decided notes stay visible this long
 
 SCHEMA_STATEMENTS = (
+    """CREATE TABLE IF NOT EXISTS junk_auto_evidence (
+        account TEXT NOT NULL, sender TEXT NOT NULL, message_id TEXT NOT NULL,
+        at INTEGER NOT NULL, PRIMARY KEY(account,sender,message_id))""",
+    "CREATE INDEX IF NOT EXISTS idx_junk_auto_age ON junk_auto_evidence(account,at)",
     """
     CREATE TABLE IF NOT EXISTS junk_sender_moves (
         account     TEXT NOT NULL,
@@ -252,7 +264,8 @@ def owner_sender(addr: str, prot: Protection | None, own_domains: Iterable[Any] 
 def on_user_junk(conn: sqlite3.Connection, account: str, sender: Any, message_id: str, *,
                  now: int | None = None, own_domains: Iterable[Any] = (),
                  add_rule: Any = None, auto_block: bool | None = None,
-                 protection: Protection | None = None, count: bool = True) -> dict[str, Any]:
+                 protection: Protection | None = None, count: bool = True,
+                 fresh_only: bool = False) -> dict[str, Any]:
     """The user moved `message_id` from `sender` to Junk (engine, inside the
     caller's transaction). Records the move and updates the notes.
     `add_rule(conn, account, pattern, kind, note, actor)` makes the block
@@ -267,8 +280,17 @@ def on_user_junk(conn: sqlite3.Connection, account: str, sender: Any, message_id
         return out
     t = int(time.time() if now is None else now)
     ensure_schema(conn)
+    fresh = False
     if count:
-        conn.execute("INSERT OR IGNORE INTO junk_sender_moves(account, sender, message_id, at) VALUES(?,?,?,?)",
+        added = conn.execute("INSERT OR IGNORE INTO junk_sender_moves(account, sender, message_id, at) VALUES(?,?,?,?)",
+                     (account, addr, str(message_id)[:255], t))
+        fresh = bool(added.rowcount)
+    automatic = AUTO_BLOCK if auto_block is None else auto_block
+    if fresh_only:
+        conn.execute('DELETE FROM junk_auto_evidence WHERE account=? AND at<?',
+                     (account, t-AUTO_WINDOW_DAYS*86400))
+    if fresh_only and automatic and count and fresh:
+        conn.execute("INSERT OR IGNORE INTO junk_auto_evidence VALUES(?,?,?,?)",
                      (account, addr, str(message_id)[:255], t))
     n = count_moves(conn, account, addr, now=t)
     out["n"] = n
@@ -284,13 +306,50 @@ def on_user_junk(conn: sqlite3.Connection, account: str, sender: Any, message_id
         return out
     status = _upsert(conn, account, addr, "suggest", n=n, msgid=message_id, now=t)
     out["suggest"] = True
-    if status != OPEN or not (AUTO_BLOCK if auto_block is None else auto_block) or add_rule is None:
+    if status != OPEN or not automatic or add_rule is None:
         return out
+    if fresh_only:
+        # A repeated click or an old suggestion is not new evidence. There
+        # must be three distinct explicit corrections while automation was on.
+        recent = int(conn.execute("SELECT COUNT(*) FROM junk_auto_evidence WHERE account=? AND sender=? AND at>=?",
+                                  (account, addr, t-AUTO_WINDOW_DAYS*86400)).fetchone()[0])
+        used = int(conn.execute("SELECT COUNT(*) FROM events WHERE account=? AND event='junk_auto_block' AND ts>=?",
+                                (account, t-86400)).fetchone()[0])
+        if not fresh or recent < BLOCK_AFTER or used >= MAX_AUTO_BLOCKS_PER_DAY:
+            return out
+        n = recent
+        out['n'] = n
+        conn.execute("UPDATE junk_sender_notes SET n_junk=? WHERE account=? AND sender=? AND kind='suggest'",
+                     (n, account, addr))
     rid = int(add_rule(conn, account, addr, "block", NOTE_TEXT.format(n=n), AUTO_BY))
     conn.execute("UPDATE junk_sender_notes SET status='auto_blocked', decided_at=?, decided_by=?, block_rule_id=? "
                  "WHERE account=? AND sender=? AND kind='suggest'", (t, AUTO_BY, rid, account, addr))
     out["blocked"] = rid
     return out
+
+
+def reset_on_ham(conn: sqlite3.Connection, account: str, sender: Any, *, now: int) -> int | None:
+    """Explicit rescue/ham cancels only our own exact block and its evidence.
+
+    Hand-made rules and other mailboxes are untouched. A removed automatic
+    block stays undone, so subsequent corrections cannot silently recreate it.
+    """
+    addr = _addr(sender)
+    if addr is None:
+        return None
+    ensure_schema(conn)
+    conn.execute('DELETE FROM junk_auto_evidence WHERE account=? AND sender=?', (account, addr))
+    conn.execute('DELETE FROM junk_sender_moves WHERE account=? AND sender=?', (account, addr))
+    conn.execute("UPDATE junk_sender_notes SET n_junk=0 WHERE account=? AND sender=? AND status='open'",
+                 (account, addr))
+    note = get(conn, account, addr, 'suggest')
+    if note is None or note['status'] != 'auto_blocked':
+        return None
+    rid = note['block_rule_id']
+    deleted = conn.execute("DELETE FROM sender_rules WHERE id=? AND account=? AND pattern=? AND kind='block' "
+                           "AND created_by=?", (rid, account, addr, AUTO_BY)).rowcount
+    decide(conn, account, addr, 'suggest', 'undone', 'user:ham', now=now)
+    return int(rid) if deleted else None
 
 
 # ---------------------------------------------------------------- admin side

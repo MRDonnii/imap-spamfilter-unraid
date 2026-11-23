@@ -66,7 +66,7 @@ if __name__ == "__main__":
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.17.0"
+VERSION = "2.18.0"
 SCORE_VERSION = 2  # A4: scores computed with the 2.0 sender context
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "/app/accounts.yml"))
@@ -381,6 +381,7 @@ class Account:
     # The user moving mail OUT of the spam folder in their mail app allows
     # that exact sender for this account (owner's wish, 2026-10-21).
     auto_allow_on_rescue: bool = True
+    auto_block_repeated_spam: bool = True
 
     # 2.2 fields (defaulted: older constructors and configs keep working).
     # B2: the owner's own (multi-tenant) shop platform. rspamd lists it on
@@ -474,6 +475,7 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
     "protected_threshold": 18.0,
     "daily_report": False,
     "auto_allow_on_rescue": True,
+    "auto_block_repeated_spam": True,
     "report_hour": 7,
     # 2.2
     "owner_platform_domains": list(DEFAULT_OWNER_PLATFORM_DOMAINS),
@@ -752,6 +754,7 @@ def _build_account(entry: dict[str, Any], defaults: dict[str, Any]) -> Account:
                 merged.get("protected_recipients"), "protected_recipients", label)],
             protected_threshold=_cfg_float(merged["protected_threshold"], "protected_threshold", label),
             daily_report=_cfg_bool(merged["daily_report"], "daily_report", label),
+            auto_block_repeated_spam=_cfg_bool(merged["auto_block_repeated_spam"], "auto_block_repeated_spam", label),
             auto_allow_on_rescue=_cfg_bool(merged["auto_allow_on_rescue"], "auto_allow_on_rescue", label),
             report_hour=_cfg_int(merged["report_hour"], "report_hour", label),
             owner_platform_domains=_cfg_domain_list(
@@ -939,7 +942,7 @@ def validate_account(acc: Account) -> None:
         raise ConfigError(f"{acc.name}: report_hour must be 0..23")
     if acc.protected_threshold < acc.min_threshold_allowed:
         raise ConfigError(f"{acc.name}: protected_threshold below min_threshold_allowed")
-    for key in ("autolearn", "daily_report", "auto_allow_on_rescue"):
+    for key in ("autolearn", "daily_report", "auto_allow_on_rescue", "auto_block_repeated_spam"):
         if not isinstance(getattr(acc, key), bool):
             raise ConfigError(f"{acc.name}: {key} must be true or false")
     for key in ("trusted_forwarders", "protected_recipients"):
@@ -2268,6 +2271,8 @@ class Db:
             """,
             (self.account, cutoff),
         )
+        self.conn.execute('DELETE FROM junk_auto_evidence WHERE account=? AND at<?',
+                          (self.account, int(_now())-30*86400))
         self.conn.execute("DELETE FROM policy_trial_results WHERE account=? AND NOT EXISTS "
                           "(SELECT 1 FROM messages m WHERE m.account=policy_trial_results.account "
                           "AND m.message_id=policy_trial_results.message_key)", (self.account,))
@@ -4126,6 +4131,7 @@ def _handle_rescue(db: Db, log: logging.Logger, acc: Account, fmap: dict[str, st
         db.drop_pending_moves_for(msgid)
         db.conn.execute("DELETE FROM rescan_queue WHERE account=? AND message_id=?", (db.account, msgid))
         db.log_event("user_rescued", msgid, detail=f"from {source}")
+        _junk_rules_after_user_ham(db, log, acc, msgid, prior['sender'])
         # 2.6 (A2): a source of a campaign sweep is back: its copies stay.
         _campaigns().cancel_for_source(db.conn, db.account, msgid, now=now, reason="flyttet tilbage")
         if threat:
@@ -4265,15 +4271,17 @@ def from_authenticated(symbols: Any, sender: str | None) -> bool:
 
 
 def _junk_rules_after_user_junk(db: Db, log: logging.Logger, acc: Account, msgid: str,
-                                sender: str | None) -> None:
+                                sender: str | None, *, explicit: bool = False) -> None:
     """2.12 (#8/#9), inside db.tx(): count the user's move to Junk per sender;
     a conflicting hand-made allow rule becomes a note for the admin, and the
     third move of the same sender in this mailbox a block rule for this
     mailbox only (junkrules.on_user_junk). Never raises.
 
-    The move counts only when the mailbox learns from moves and the From
-    was authenticated (from_authenticated); the owner's domains and every
-    mailbox's domain and address are protected like in the WebUI."""
+    New automated rules use three fresh corrections in 30 days, capped at
+    five per rolling day; the per-account switch can retain suggestions only.
+    The move counts only when the mailbox learns from moves (or the WebUI
+    explicitly marks spam) and the From was authenticated (from_authenticated);
+    the owner's domains and every mailbox's domain and address are protected like in the WebUI."""
     own = [*(acc.owner_platform_domains or ()), *(acc.webshop_domains or ())]
     user = str(getattr(acc, "user", "") or "")
     if "@" in user:
@@ -4283,7 +4291,10 @@ def _junk_rules_after_user_junk(db: Db, log: logging.Logger, acc: Account, msgid
         authed = from_authenticated(_row_get(row, "symbols") if row is not None else None, sender)
         res = _junkrules().on_user_junk(db.conn, acc.name, sender, msgid, now=int(_now()), own_domains=own,
                                         add_rule=add_sender_rule, protection=_owner_protection(acc),
-                                        count=bool(acc.learn_from_moves) and authed)
+                                        count=(explicit or bool(acc.learn_from_moves)) and authed
+                                              and acc.mode in ('move', 'flag'),
+                                        auto_block=bool(getattr(acc, 'auto_block_repeated_spam', True)),
+                                        fresh_only=True)
     except Exception as ex:  # noqa: BLE001 - bookkeeping only, never fail the junk poll
         log.warning("junk rule bookkeeping for %s failed: %s", acc.name, type(ex).__name__)
         return
@@ -4294,6 +4305,14 @@ def _junk_rules_after_user_junk(db: Db, log: logging.Logger, acc: Account, msgid
         log.info("blocked a sender for %s after %d moves to Junk (rule %s)", acc.name, res["n"], res["blocked"])
     elif res.get("suggest"):
         db.log_event("junk_block_suggested", msgid, detail=f"n={res['n']}")
+
+
+def _junk_rules_after_user_ham(db: Db, log: logging.Logger, acc: Account, msgid: str,
+                               sender: str | None) -> None:
+    """Inside the verdict transaction: undo only our own automatic block."""
+    rid = _junkrules().reset_on_ham(db.conn, acc.name, sender, now=int(_now()))
+    if rid is not None:
+        db.log_event('junk_auto_block_removed', msgid, detail=f'rule={rid}; user ham')
 
 
 def _auto_allow_sender(db: Db, log: logging.Logger, acc: Account, msgid: str,

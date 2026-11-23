@@ -161,6 +161,7 @@ Filen har en `defaults:`-blok og en `accounts:`-liste. En nøgle på kontoen vin
 | `trusted_forwarders` | `[mail.vexar.example, 203.0.113.109]` | Videresendere, som filteret kigger forbi |
 | `protected_recipients` | [] | Beskyttede modtageradresser |
 | `protected_threshold` | 18.0 | Grænse for mails til beskyttede adresser |
+| `auto_block_repeated_spam` | true | (2.18) Husk gentagen bekræftet spam for den enkelte konto; se nedenfor |
 | `auto_allow_on_rescue` | true | Tillad afsenderen, når en mail trækkes ud af Spamfilter |
 | `daily_report` | false | Daglig kvittering i indbakken |
 | `report_hour` | 7 | Klokkeslæt for kvitteringen (0–23) |
@@ -677,3 +678,35 @@ bekræftet træning kan fortsat påvirke det delte signal. Den faktisk målte ef
 kræver de særskilte evalueringsprøver; ingen familiepost er brugt i kodens prøver.
 AI-prøverne dokumenterer grænserne i appens prompt/protokol og efterbehandling,
 ikke at enhver konkret model modstår enhver prompt-injektion.
+
+## Husk gentagen spam automatisk (2.18)
+
+Efter ejerens godkendelse er `auto_block_repeated_spam` som standard slået til
+pr. postkasse. Kontakten **Husk gentagen spam automatisk** findes under kontoen
+på **Lær af mailprogrammet**. Fra betyder fortsat forslag til administratoren;
+allerede oprettede regler bevares og kan fjernes under Regler eller Tjek disse.
+
+- Tre forskellige mails fra samme **bekræftede præcise adresse**, som brugeren
+  selv markerer via **Flyt til spam** eller flytter til Spamfilter i
+  mailprogrammet, kan oprette en lokal blokregel. Der tælles kun nye rettelser,
+  mens automatikken er slået til, inden for 30 dage. Dubletklik/efterfølgende
+  IMAP-observation tæller ikke igen. Gamle forslag opgraderes ikke automatisk.
+- Der oprettes højst fem nye automatiske blokeringer pr. konto i et rullende
+  døgn. Andre sager forbliver forslag; der køres ingen automatisk baggrunds-
+  oprydning af gamle mails. Reglen gælder fremtidig mail; intet slettes.
+- Kun Filtrér/Markér. Flytninger tæller kun med **Lær af mine flytninger**;
+  den eksplicitte WebUI-handling virker også uden den indstilling. Filterets
+  egne flytninger, udbyderens junkplacering, AI og Bayes-gæt tæller ikke.
+- Egne domæner/platforme, håndlavede tilladelser og eksisterende regler
+  respekteres. Der oprettes ingen domæne-/globalregel. Familiemedlemmers
+  forskellige nyhedsbrevsvalg bliver i den enkelte postkasse.
+- **Frigiv**, **Lær som legitim** eller en observeret flytning tilbage til
+  indbakken nulstiller tællegrundlaget. En uændret automatisk blokering fjernes
+  og forbliver fortrudt; den genskabes ikke automatisk. Håndlavede/ændrede
+  regler bevares. Det gælder også, når automatisk tilladelse er slået fra.
+
+Tabellen `junk_auto_evidence` gemmer lokale konto/adresse/mailnøgler og tid,
+uden mailtekst. Udløbne rækker ryddes ved normale beskedoprydninger og nye
+rettelser. Blokering/fortrydelse vises i hændelser og eksisterende Tjek disse.
+Dette hjælper ved gentagen spam fra samme adresse; skiftende afsendere bliver
+fortsat behandlet af eksisterende scoring, Bayes, fuzzy og kampagneværn.

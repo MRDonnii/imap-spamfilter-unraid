@@ -128,7 +128,7 @@ RELOAD_FILE = STATE_DIR / "reload_requested"
 STATIC_DIR = Path(__file__).with_name("static")
 FAVICON_PATH = Path(__file__).with_name("favicon.png")
 
-FALLBACK_VERSION = "2.17.0"
+FALLBACK_VERSION = "2.18.0"
 DASHBOARD_PORT = 8080
 PBKDF2_ITERATIONS = 600_000
 SESSION_LIFETIME = 12 * 3600      # absolute
