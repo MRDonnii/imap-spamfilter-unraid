@@ -2,6 +2,7 @@
 
 ## 2.15.0 — 2026-11-23 (beta)
 
+- Mappeobservationer uden hentbart indhold ændrer ingen eksisterende afgørelser og udløser ingen læring, heller ikke ved genbrugte ID'er. De tælles særskilt under Drift.
 - Mails uden Message-ID scannes, og genbrugte ID'er med andet indhold får en selvstændig vurdering. Additive, kontobundne indholdsfingerprints beskytter frigivelse, læring, opslag og egne notifikationer uden at ændre mailens headere.
 - Almindelige tilladelser genkontrolleres før en ventende flytning med komplette beslutningssymboler. Virus og forfalskningskontrol bevares. En hævet kontogrænse aflyser ventende rene scorebeslutninger.
 - Drift viser 14 dages scanningstællere pr. postkasse. Nye lokale `quality-export`/`quality-evaluate` giver versionsmærket første-scanning-evaluering af menneskeligt mærkede prøveudvalg uden træning eller mailadgang.

@@ -405,7 +405,7 @@ Siden **Filtrering → AI-vurdering** (`/ai`, kun administratorer). Ingen nøgle
 
 ## Scanningdækning og lokal evaluering (2.15)
 
-**Drift → Scanningens dækning** viser 14 kalenderdages hændelser pr. postkasse: scannet, læst før første kontrol, for stor, fejlede forsøg og opgivet scanning. Et fejlet forsøg kan senere lykkes. Genscanninger, udbyderspam og læste mails har forskellige nævnere, så der vises ingen samlet scanningsprocent. Visningen er kun for administratorer og ændrer ingen mail eller træning.
+**Drift → Scanningens dækning** viser 14 kalenderdages hændelser pr. postkasse: scannet, læst før første kontrol, for stor, fejlede forsøg, opgivet scanning og mappeindhold, der ikke kunne bekræftes. En spam-mappeobservation uden body (fx oversize) ændrer ingen afgørelse eller læring. Et fejlet forsøg kan senere lykkes. Genscanninger, udbyderspam og læste mails har forskellige nævnere, så der vises ingen samlet scanningsprocent. Visningen er kun for administratorer og ændrer ingen mail eller træning.
 
 Første normale scanning gemmes i `scan_observations` med score, effektiv grænse, beslutning, filterversion og tidspunkt. Senere AI-vurderinger overskriver ikke observationen. Den nye evaluering måler derfor **første scanning før AI**, ikke kvaliteten af en AI-model eller dens confidence. AI-model og prompt indgår ikke i dette mål; sammenlign kun observationer med samme grundlag og versionsgruppe.
 

@@ -148,9 +148,10 @@ def test_pending_learn_oversize_is_never_fetched(eng, monkeypatch):
     h.client.folders["Junk"].msgs[uid].size = eng.MAX_FETCH_BYTES + 10
     h.poll()
     r = h.row("big@x")
-    assert r["learned_as"] == "unlearnable" and r["pending_learn"] is None
+    assert r["learned_as"] is None and r["pending_learn"] is None
+    assert r["user_verdict"] is None  # no content proof of a user move
     assert h.rspamd.learn_calls == [] and body_fetches_in(h, "Junk") == []
-    assert h.events("learn_oversize")
+    assert h.events("junk_identity_unverified")
 
 
 def test_pending_learn_uses_exact_message_id(eng, monkeypatch):

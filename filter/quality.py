@@ -10,7 +10,8 @@ from collections import defaultdict
 
 METRICS = {'scanned': 'Scannet', 'skipped_seen': 'Læst før første kontrol',
            'skipped_oversize': 'For stor', 'scan_failed': 'Fejlede scanningsforsøg',
-           'scan_giveup': 'Scanning opgivet'}
+           'scan_giveup': 'Scanning opgivet',
+           'junk_identity_unverified': 'Mappeindhold ikke bekræftet'}
 SCHEMA = '''CREATE TABLE IF NOT EXISTS scan_observations (
  account TEXT NOT NULL, message_key TEXT NOT NULL, score REAL NOT NULL,
  threshold REAL NOT NULL, prediction TEXT NOT NULL, version TEXT NOT NULL,

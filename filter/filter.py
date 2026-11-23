@@ -6998,12 +6998,18 @@ def _junk_message_seen(db: Db, log: logging.Logger, acc: Account, fmap: dict[str
     hdr = _header_bytes(data)
     msgid, subject, sender = parse_envelope(hdr)
     body = _body_bytes(data)
-    if body:
-        with db.tx():
-            wire = parse_envelope(body)[0]
-            msgid = mailidentity.bind(db.conn, db.account, wire, body,
-                                    legacy_exists=wire is not None and db.get_message(wire) is not None
-                                    and mailidentity.binding(db.conn, db.account, wire) is None)
+    if not body:
+        # Neither a missing FETCH body nor an oversized mail proves that
+        # this is the message whose ID appears in the headers. Do not
+        # overwrite a previous release or schedule header-only learning.
+        db.log_event("junk_identity_unverified", detail=f"uid={uid}")
+        db.bump("junk_identity_unverified")
+        return
+    with db.tx():
+        wire = parse_envelope(body)[0]
+        msgid = mailidentity.bind(db.conn, db.account, wire, body,
+                                legacy_exists=wire is not None and db.get_message(wire) is not None
+                                and mailidentity.binding(db.conn, db.account, wire) is None)
     if not msgid:
         return
     if _is_our_receipt(db, msgid, hdr):
@@ -7187,17 +7193,12 @@ def _poll_one_junk(client: IMAPClient, db: Db, log: logging.Logger, acc: Account
             data = fetched.get(uid)
             if data is not None:
                 try:
-                    wire = parse_envelope(_header_bytes(data))[0]
                     if int(data.get(b"RFC822.SIZE") or 0) <= MAX_FETCH_BYTES:
                         body = _body_bytes(client.fetch([uid], [b"BODY.PEEK[]"]).get(uid))
                         if body:
                             data[b"BODY[]"] = body
                     _junk_message_seen(db, log, acc, fmap, uid, data, folder,
                                        first_pass=first_pass or uid <= preexisting_max)
-                    if wire and int(data.get(b"RFC822.SIZE") or 0) > MAX_FETCH_BYTES:
-                        pending = db.get_message(wire)
-                        if pending is not None and pending["pending_learn"]:
-                            _mark_unlearnable(db, wire, "learn_oversize", "metadata exceeds body limit")
                 except _CONN_ERRORS:
                     raise
                 except Exception as ex:  # noqa: BLE001 - one bad header must not stall the poll

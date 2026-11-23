@@ -149,3 +149,28 @@ def test_truncated_display_symbols_cannot_hide_spoof_at_move(eng, monkeypatch):
     h.advance(100)
     h.moves()
     assert h.client.msgids('Junk') == ['spoof@x']
+
+
+@pytest.mark.parametrize('caps', [GIGAHOST_CAPS, SCANNET_CAPS])
+@pytest.mark.parametrize('unavailable', ['oversize', 'missing_body'])
+def test_unverified_junk_collision_cannot_change_existing_release(eng, monkeypatch, caps, unavailable):
+    h = Harness(eng, monkeypatch, caps=caps)
+    h.deliver('released-size@x', score=1)
+    h.scan()
+    with h.db.tx():
+        h.db.update_message('released-size@x', user_verdict='ham', our_action='manual_release')
+    h.poll()
+    h.client.add('Junk', make_message('released-size@x', body='different oversize payload'),
+                 size=eng.MAX_FETCH_BYTES + 1 if unavailable == 'oversize' else None)
+    if unavailable == 'missing_body':
+        fetch = h.client.fetch
+        def without_body(uids, parts):
+            if h.client.selected == 'Junk' and b'BODY.PEEK[]' in parts:
+                return {u: {} for u in uids}
+            return fetch(uids, parts)
+        monkeypatch.setattr(h.client, 'fetch', without_body)
+    h.poll()
+    assert h.row('released-size@x')['user_verdict'] == 'ham'
+    assert h.row('released-size@x')['our_action'] == 'manual_release'
+    assert h.rspamd.learn_calls == []
+    assert h.events('junk_identity_unverified')
