@@ -2,6 +2,11 @@
 
 ## Under udvikling efter 2.16.0-beta
 
+- Forsinkede AI- og kampagneafgørelser bruger særskilte profiler i den fælles
+  rene beslutningsmotor med lokale, kontoafgrænsede input/resultat-spor.
+  `sfctl policy-preview --stage` gengiver de enkelte faser skrivebeskyttet.
+  Eksisterende prioritering, kampagnekonsensus og scoregulve bevares.
+
 - Et personligt valg om at flytte et legitimt, etableret nyhedsbrev til spam
   starter ikke længere kampagneafgørelser på andre postkasser. Den eksisterende
   beskyttelse mod Bayes/fuzzy-læring af sådanne valg bevares.

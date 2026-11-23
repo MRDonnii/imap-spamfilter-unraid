@@ -855,3 +855,17 @@ def test_raised_threshold_preserves_explicit_user_spam_move(eng, monkeypatch, ol
     h.advance(61)
     h.moves()
     assert h.row('user-spam-after-ai@example.test')['our_action'] == 'moved_to_junk'
+
+
+def test_ai_policy_trace_replays_actual_application_without_mail_content(eng, monkeypatch, ollama):
+    import decisiontrace
+    h = harness(eng, monkeypatch)
+    h.deliver('trace-delayed@example.test', score=6.0, body='PRIVATE TRACE BODY')
+    h.scan()
+    drain(h)
+    apply(h)
+    row = h.db.conn.execute("SELECT snapshot FROM decision_traces WHERE account=? AND stage='ai_policy'",
+                            (h.acc.name,)).fetchone()
+    assert row and 'PRIVATE TRACE BODY' not in row[0]
+    result = decisiontrace.replay(row[0])
+    assert result['action'] == 'pending_move' and result['reason'] == 'ai_score'

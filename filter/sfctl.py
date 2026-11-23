@@ -1931,7 +1931,7 @@ def cmd_policy_preview(args):
     try:
         conn = sqlite3.connect(Path(ui.DB_PATH).resolve().as_uri() + '?mode=ro', uri=True)
         try:
-            result = decisiontrace.preview(conn, args.account, threshold=args.threshold, limit=args.limit)
+            result = decisiontrace.preview(conn, args.account, threshold=args.threshold, limit=args.limit, stage=args.stage)
         finally:
             conn.close()
     except ValueError as ex:
@@ -2428,6 +2428,8 @@ def build_parser() -> argparse.ArgumentParser:
     trial.add_argument("--stop", action="store_true", help="stop registreringen; aktive regler bevares")
     p = add("policy-preview", "afprøv gemte policy-input lokalt uden mailhandlinger", cmd_policy_preview)
     p.add_argument("account", help="postkassens interne navn")
+    p.add_argument("--stage", choices=("scan", "ai_policy", "campaign_context", "campaign_score", "campaign_live"),
+                   default="scan", help="beslutningsfase (standard scan)")
     p.add_argument("--threshold", type=float, default=None, help="prøv en anden scoregrænse; gemmes ikke")
     p.add_argument("--limit", type=int, default=100, help="seneste antal mails, 1–200 (standard 100)")
     p = add("quality-evaluate", "evaluér et lokalt mærket holdout-sæt uden træning", cmd_quality_evaluate)

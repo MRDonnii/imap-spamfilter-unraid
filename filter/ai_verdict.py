@@ -53,6 +53,7 @@ from __future__ import annotations
 import email
 import email.header
 import email.policy
+import decisionpolicy
 import html as _html
 import hashlib
 import ipaddress
@@ -1116,26 +1117,20 @@ def _get(row: Any, key: str) -> Any:
         return None
 
 
-def _block_reason(eng: Any, acc: Any, msg: Any, r: Any) -> str | None:
-    if msg is None:
-        return "gone"
-    if _get(msg, "user_verdict") or _get(msg, "our_action") not in (None, "none"):
-        return "decided"
-    if _get(msg, "threat"):
-        return "threat"
-    if _get(msg, "current_folder") != _get(r, "folder"):
-        return "moved"
+def _guard_facts(msg: Any, r: Any) -> dict:
     try:
         names = {str(s.get("n")) for s in json.loads(_get(msg, "symbols") or "[]") if isinstance(s, dict)}
     except (TypeError, ValueError):
         names = set()
-    if names & CONTACT_SYMBOLS or PROTECTED_SYMBOL in names:
-        return "contact"
-    if names & NAMESPOOF_SYMBOLS:
-        return "namespoof"
-    if SYMBOL in names:
-        return "done"
-    return None
+    return dict(present=msg is not None, user_verdict=_get(msg, "user_verdict"),
+                action=_get(msg, "our_action"), threat=_get(msg, "threat"),
+                folder_matches=_get(msg, "current_folder") == _get(r, "folder"),
+                contact=bool(names & CONTACT_SYMBOLS or PROTECTED_SYMBOL in names),
+                namespoof=bool(names & NAMESPOOF_SYMBOLS), has_ai=SYMBOL in names)
+
+
+def _block_reason(eng: Any, acc: Any, msg: Any, r: Any) -> str | None:
+    return decisionpolicy.ai_skip_reason(_guard_facts(msg, r))
 
 
 def apply_ready(eng: Any, db: Any, log_: logging.Logger, acc: Any, fmap: dict[str, str]) -> int:
@@ -1158,26 +1153,21 @@ def apply_ready(eng: Any, db: Any, log_: logging.Logger, acc: Any, fmap: dict[st
         msgid = r["message_id"]
         with db.tx():
             msg = db.get_message(msgid)
-            if settings["mode"] != "on":
-                why: str | None = "off"
-            elif getattr(acc, "mode", "") != "move":
-                why = "account_mode"
-            elif (int(r["created_at"]) > int(r["deadline"] or 0)
-                  or now > int(r["deadline"] or 0) + APPLY_LATE_S):
-                # Answered after the grace period, or picked up here much later
-                # (busy thread, restart): the user has had the mail for a while.
-                why = "late"
+            pts = float(r["points"] or 0.0)
+            new = round(float(_get(msg, "our_score") or r["score_before"] or 0.0) + pts, 3)
+            facts = dict(_guard_facts(msg, r), mode=settings["mode"], account_mode=getattr(acc, "mode", ""),
+                         late=(int(r["created_at"]) > int(r["deadline"] or 0)
+                               or now > int(r["deadline"] or 0) + APPLY_LATE_S),
+                         final=new, threshold=float(acc.threshold),
+                         original_threshold=float(r["threshold"] or acc.threshold))
+            decision = decisionpolicy.decide_deferred('ai', facts)
+            record = getattr(eng, '_record_policy_trace', None)
+            if record is not None:
+                record(db, msgid, 'ai_policy', decision, now)
+            if decision.action.startswith('skipped:'):
+                outcome = decision.action
             else:
-                why = _block_reason(eng, acc, msg, r)
-            if why is not None:
-                outcome = f"skipped:{why}"
-            else:
-                pts = float(r["points"] or 0.0)
-                new = round(float(_get(msg, "our_score") or r["score_before"] or 0.0) + pts, 3)
-                # A late result must respect a newly raised account threshold.
-                # Keep the original effective floor too; do not silently make
-                # an old AI job more aggressive after a threshold decrease.
-                thr = max(float(r["threshold"] or acc.threshold), float(acc.threshold))
+                thr = max(facts['original_threshold'], facts['threshold'])
                 try:
                     syms = [s for s in json.loads(_get(msg, "symbols") or "[]") if isinstance(s, dict)]
                 except (TypeError, ValueError):
@@ -1188,7 +1178,7 @@ def apply_ready(eng: Any, db: Any, log_: logging.Logger, acc: Any, fmap: dict[st
                                               symbols=json.dumps(syms, ensure_ascii=False, separators=(",", ":")))
                 detail = (f"{r['verdict']} {float(r['confidence'] or 0):.2f} +{pts:g} "
                           f"score={float(r['score_before'] or 0):.2f}->{new:.2f}")
-                if new >= thr:
+                if decision.spam:
                     fields["our_action"] = "pending_move"
                     db.update_message(msgid, **fields)
                     due = max(now, int(r["queued_at"] or now) + int(getattr(acc, "move_grace_seconds", 60) or 0))

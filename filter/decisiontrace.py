@@ -10,6 +10,8 @@ import math
 
 import decisionpolicy
 
+STAGES = ('scan', 'ai_policy', 'campaign_context', 'campaign_score', 'campaign_live')
+
 SCHEMA = '''CREATE TABLE IF NOT EXISTS decision_traces (
  id INTEGER PRIMARY KEY, account TEXT NOT NULL, message_key TEXT NOT NULL,
  stage TEXT NOT NULL, created_at INTEGER NOT NULL, digest TEXT NOT NULL,
@@ -50,7 +52,8 @@ def record(conn, account, key, stage, decision, now):
     evidence = getattr(decision, 'policy_input', None)
     if evidence is None:
         return None
-    snapshot = _json(dict(schema_version=1, inputs=evidence, result=_result(decision)))
+    snapshot = _json(dict(schema_version=2 if 'profile' in evidence else 1,
+                          inputs=evidence, result=_result(decision)))
     digest = hashlib.sha256(snapshot.encode()).hexdigest()
     conn.execute('INSERT OR IGNORE INTO decision_traces(account,message_key,stage,created_at,digest,snapshot) '
                  'VALUES(?,?,?,?,?,?)', (account, key, stage, int(now), digest, snapshot))
@@ -60,9 +63,13 @@ def record(conn, account, key, stage, decision, now):
 
 def replay(snapshot, *, threshold=None):
     data = json.loads(snapshot) if isinstance(snapshot, str) else snapshot
-    if type(data.get('schema_version')) is not int or data['schema_version'] != 1:
+    if type(data.get('schema_version')) is not int or data['schema_version'] not in (1, 2):
         raise ValueError('Ukendt format for beslutningsspor.')
     evidence = dict(data['inputs'])
+    if data['schema_version'] == 2:
+        if threshold is not None:
+            raise ValueError('Forsinkede spor kan gengives, men ikke afprøves med en ny grænse.')
+        return _result(decisionpolicy.decide_deferred(evidence['profile'], evidence['facts']))
     if threshold is not None:
         evidence['threshold'] = threshold
     for name in ('final', 'threshold'):
@@ -73,15 +80,19 @@ def replay(snapshot, *, threshold=None):
     return _result(decisionpolicy.decide(**evidence))
 
 
-def preview(conn, account, *, threshold=None, limit=100):
+def preview(conn, account, *, threshold=None, limit=100, stage='scan'):
+    if stage not in STAGES:
+        raise ValueError('Ukendt beslutningsfase.')
+    if stage != 'scan' and threshold is not None:
+        raise ValueError('Forsinkede spor kan gengives, men ikke afprøves med en ny grænse.')
     if threshold is not None and (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
                                   or not math.isfinite(threshold) or not 0 < threshold <= 100):
         raise ValueError('Prøvegrænsen skal være et endeligt tal over 0 og højst 100.')
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
         raise ValueError('Antal skal være mellem 1 og 200.')
-    rows = conn.execute("SELECT id,created_at,snapshot,digest FROM decision_traces WHERE account=? AND stage='scan' "
-                        "AND id IN (SELECT MAX(id) FROM decision_traces WHERE account=? AND stage='scan' "
-                        'GROUP BY message_key) ORDER BY id DESC LIMIT ?', (account, account, limit)).fetchall()
+    rows = conn.execute("SELECT id,created_at,snapshot,digest FROM decision_traces WHERE account=? AND stage=? "
+                        "AND id IN (SELECT MAX(id) FROM decision_traces WHERE account=? AND stage=? "
+                        'GROUP BY message_key) ORDER BY id DESC LIMIT ?', (account, stage, account, stage, limit)).fetchall()
     items = []
     for trace_id, created_at, snapshot, digest in rows:
         try:
@@ -100,8 +111,10 @@ def preview(conn, account, *, threshold=None, limit=100):
                                           for k in ('spam', 'action', 'rule_hit', 'rule_id'))))
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
             items.append(dict(trace_id=trace_id, created_at=created_at, valid=False))
-    return dict(account=account, scope='recorded_policy_inputs', threshold_override=threshold,
+    return dict(account=account, stage=stage, scope='recorded_policy_inputs', threshold_override=threshold,
                 sampled=len(items), changed=sum(bool(r.get('changed')) for r in items),
                 invalid=sum(not r['valid'] for r in items), items=items, automatic_activation=False,
-                warning='Kun gemte første-scannings-input og deres daværende regler. Ingen ny scanning, '
-                        'mailflytning eller træning. Ikke samlet træfsikkerhed eller prøve på levende trafik.')
+                warning=('Kun gemte første-scannings-input og deres daværende regler. ' if stage == 'scan' else
+                         'Kun gemte input for den valgte beslutningsfase. ') +
+                        'Ingen ny scanning, mailflytning eller træning. '
+                        'Ikke samlet træfsikkerhed eller prøve på levende trafik.')

@@ -501,10 +501,33 @@ spor. Der udskrives interne spor-ID'er, ikke mail-ID'er eller fulde regelinput.
 
 Prøven bruger **de daværende regler og signaler**. Den er ikke en genscanning,
 en måling mod menneskeligt facit eller en baggrundsprøve på levende trafik.
-Asynkrone AI-/kampagneafgørelser og de omkringliggende IMAP-/ZAP-værn er endnu
-ikke en komplet samlet beslutningshistorik. Udskillelsen og sporene ændrer ikke
+De omkringliggende IMAP-/ZAP-værn er fortsat ikke en komplet samlet
+beslutningshistorik. Udskillelsen og sporene ændrer ikke
 beslutningsrækkefølgen, herunder at en allerede eksplicit frigivet mail bevarer
 sin sticky brugerafgørelse.
+
+### Forsinkede AI- og kampagneafgørelser
+
+AI og kampagner bruger også den rene beslutningsgrænse. De har egne profiler,
+så kampagners uafhængige konsensus og lavere scoregulv bevares. AI fastholder
+både den oprindelige og en eventuelt hævet kontogrænse. Adapterne kontrollerer
+fortsat kontotilstand, IMAP-identitet, flag og brugerafgørelser før handlinger.
+
+Nye lokale spor gemmer kun de forbrugte scorer, tal og afledte sikkerhedsfakta;
+ingen mailtekst, emner eller afsenderadresser. Sporene bruger format 2; ældre
+format 1 for scanning kan fortsat gengives. Vælg en fase med:
+
+```sh
+docker exec spamfilter sfctl policy-preview mailbox-a --stage ai_policy
+docker exec spamfilter sfctl policy-preview mailbox-a --stage campaign_context
+docker exec spamfilter sfctl policy-preview mailbox-a --stage campaign_score
+docker exec spamfilter sfctl policy-preview mailbox-a --stage campaign_live
+```
+
+Hver fase er et separat øjebliksbillede, ikke en samlet transaktionshistorik.
+Kaldet er kontoafgrænset og skrivebeskyttet. `--threshold` er kun tilladt for
+`scan`: de forsinkede spor har ikke alle oplysninger til en ærlig prøve med
+en anden grænse. Ingen prøve kontakter IMAP, flytter mail eller ændrer regler.
 
 ### Reservér prøvemateriale mod fremtidig læring (2.16)
 

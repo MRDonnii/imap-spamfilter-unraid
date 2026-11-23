@@ -83,6 +83,7 @@ from email.utils import parseaddr
 from typing import Any, Callable, Iterable
 
 import siteconfig
+import decisionpolicy
 
 log = logging.getLogger("campaigns")
 
@@ -713,56 +714,64 @@ def _allowed(eng: Any, conn: sqlite3.Connection, account: str, addr: str) -> boo
         return False
 
 
+def _policy(eng: Any, db: Any, msgid: str, profile: str, facts: dict, now: int):
+    decision = decisionpolicy.decide_deferred(profile, facts)
+    record = getattr(eng, '_record_policy_trace', None)
+    if record is not None:
+        try:
+            with db.tx():
+                record(db, msgid, profile, decision, now)
+        except sqlite3.Error as ex:
+            log.warning("campaign policy evidence unavailable: %s", type(ex).__name__)
+    return decision
+
+
 def _one(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, inbox: str, uv: int, r: Any,
          now: int) -> str:
     msgid = r["message_id"]
     row = db.get_message(msgid)
-    if row is None:
-        return _skip(db, r, "ukendt", now=now)
-    if not source_active(db.conn, r["src_account"], r["src_message_id"]):
-        # The user released / learned as ham / moved back the source meanwhile.
-        return _skip(db, r, REASON_SOURCE, now=now)
-    if row["user_verdict"] or eng._sticky_ham(row):
-        return _skip(db, r, "brugerens afgørelse", now=now)
-    action = row["our_action"] or "none"
-    if action not in ("none", NEWSLETTER_PENDING, NEWSLETTER_MOVED) and not (
-            acc.mode == "shadow" and action == "shadow_spam"):
-        return _skip(db, r, f"ændret ({action})", now=now)
+    action = (_row(row, 'our_action') or 'none') if row is not None else 'none'
     folder = inbox
     if action == NEWSLETTER_MOVED:
         try:
             folder = eng._newsletters().folder_of(acc)
-        except Exception:  # noqa: BLE001
-            folder = ""
-        if not folder or row["current_folder"] != folder:
-            return _skip(db, r, "ikke i nyhedsbrevsmappen", now=now)
-    elif row["current_folder"] != inbox:
-        return _skip(db, r, "ikke i indbakken", now=now)
-    if _ts(row) and _ts(row) < now - WINDOW_S:
-        return _skip(db, r, "ældre end 3 døgn", now=now)
-    if _symbol_names(row["symbols"]) & TRUST_SYMBOLS:
-        return _skip(db, r, "kendt afsender", now=now)
-    addr = sender_addr(row["sender"])
-    if str(row["rule_hit"] or "").startswith("allow:") or _allowed(eng, db.conn, acc.name, addr):
-        return _skip(db, r, "tilladt afsender", now=now)
-    if any(_under(addr.rpartition("@")[2], d) for d in _own_for(acc)):
-        return _skip(db, r, "egen afsender", now=now)
-    rcpt = protected_rcpt(row["symbols"])
-    if rcpt and _allowed(eng, db.conn, acc.name, rcpt):
-        return _skip(db, r, "beskyttet adresse med Tillad-regel", now=now)
+        except Exception:  # noqa: BLE001 - missing local folder remains a skip
+            folder = ''
+    addr = sender_addr(_row(row, 'sender')) if row is not None else ''
+    rcpt = protected_rcpt(_row(row, 'symbols')) if row is not None else ''
+    stamp = _ts(row) if row is not None else 0
+    context = dict(present=row is not None,
+                   source_active=row is not None and source_active(db.conn, r['src_account'], r['src_message_id']),
+                   user_verdict=_row(row, 'user_verdict') if row is not None else None,
+                   sticky_ham=bool(row is not None and eng._sticky_ham(row)), action=action, mode=acc.mode,
+                   folder_matches=bool(folder and row is not None and row['current_folder'] == folder),
+                   old=bool(stamp and stamp < now-WINDOW_S),
+                   trusted=bool(_symbol_names(_row(row, 'symbols')) & TRUST_SYMBOLS) if row is not None else False,
+                   allowed=(str(_row(row, 'rule_hit') or '').startswith('allow:') if row is not None else False)
+                           or _allowed(eng, db.conn, acc.name, addr),
+                   own_sender=any(_under(addr.rpartition('@')[2], d) for d in _own_for(acc)),
+                   protected_allow=bool(rcpt and _allowed(eng, db.conn, acc.name, rcpt)))
+    decision = _policy(eng, db, msgid, 'campaign_context', context, now)
+    if not decision.spam:
+        return _skip(db, r, decision.note, now=now)
     # Score floor: the copy itself must already look like spam to this
     # mailbox, unless several users / mailboxes agree independently.
     try:
         score = float(row["our_score"])
     except (TypeError, ValueError):
         score = None
-    floor = _effective_threshold(acc, row["symbols"]) - SCORE_FLOOR_MARGIN
-    if score is None or score < floor:
+    threshold = _effective_threshold(acc, row["symbols"])
+    consensus = False
+    if score is None or score < threshold - SCORE_FLOOR_MARGIN:
         src = db.conn.execute("SELECT campaign_key FROM campaign_source WHERE account=? AND message_id=?",
                               (r["src_account"], r["src_message_id"])).fetchone()
-        if src is None or independent_verdicts(db.conn, src[0]) < MIN_INDEPENDENT_VERDICTS:
-            return _skip(db, r, REASON_FLOOR, now=now)
-    if acc.mode in ("move", "flag") and _hourly_used(db, now) >= MAX_MOVES_PER_HOUR:
+        consensus = src is not None and independent_verdicts(db.conn, src[0]) >= MIN_INDEPENDENT_VERDICTS
+    budget = dict(score=score, threshold=threshold, margin=SCORE_FLOOR_MARGIN, consensus=consensus,
+                  mode=acc.mode, hourly_used=_hourly_used(db, now), hourly_limit=MAX_MOVES_PER_HOUR)
+    decision = _policy(eng, db, msgid, 'campaign_score', budget, now)
+    if decision.action == 'skipped':
+        return _skip(db, r, decision.note, now=now)
+    if decision.action == 'deferred':
         with db.tx():
             db.log_event("campaign_deferred", msgid, detail=f"højst {MAX_MOVES_PER_HOUR} i timen")
         return "deferred"
@@ -782,25 +791,17 @@ def _act(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, folder:
     msgid = r["message_id"]
     where = "indbakken" if action != NEWSLETTER_MOVED else "nyhedsbrevsmappen"
     uids = list(eng.find_uids_by_message_id(client, msgid) or [])
-    if not uids:
-        return _skip(db, r, f"ikke længere i {where}", now=now)
-    if len(uids) > 1:
-        return _skip(db, r, "flere mails med samme Message-ID", now=now)
-    uid = int(uids[0])
-    data = client.fetch([uid], [b"FLAGS", b"INTERNALDATE"]).get(uid) or {}
+    data = (client.fetch([int(uids[0])], [b"FLAGS", b"INTERNALDATE"]).get(int(uids[0])) or {}) if len(uids) == 1 else {}
     flags = eng._flag_names(data.get(b"FLAGS"))
-    if "\\Flagged" in flags:
-        return _skip(db, r, "stjernemarkeret", now=now)
-    if "\\Deleted" in flags:
-        return _skip(db, r, "markeret slettet", now=now)
-    if "\\Seen" in flags:
-        # Like the rescans (B19): read mail is never taken away for a
-        # campaign verdict - the user may be reading it right now.
-        return _skip(db, r, "læst", now=now)
     idate = eng._internaldate_ts(data)
-    if idate and idate < now - WINDOW_S:
-        return _skip(db, r, "ældre end 3 døgn", now=now)
-    if acc.mode == "move":
+    live = dict(matches=len(uids), where=where, flagged='\\Flagged' in flags,
+                deleted='\\Deleted' in flags, seen='\\Seen' in flags,
+                old=bool(idate and idate < now-WINDOW_S), mode=acc.mode)
+    decision = _policy(eng, db, msgid, 'campaign_live', live, now)
+    if not decision.spam:
+        return _skip(db, r, decision.note, now=now)
+    uid = int(uids[0])
+    if decision.action == "move":
         with db.tx():
             db.update_message(msgid, our_action="pending_move", last_seen=now)
             if action == NEWSLETTER_PENDING:
@@ -814,7 +815,7 @@ def _act(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, folder:
             db.log_event("campaign_move", msgid, detail=_detail(r))
         log_.info("campaign copy %s queued for move (source %s)", msgid, r["src_account"])
         return "moved"
-    if acc.mode == "flag":
+    if decision.action == "flag":
         client.add_flags([uid], eng._junk_flags(None))
         with db.tx():
             db.update_message(msgid, our_action="flagged", last_seen=now)

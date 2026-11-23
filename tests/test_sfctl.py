@@ -1121,3 +1121,29 @@ def test_policy_trial_rejects_unknown_account_and_nonfinite_threshold(env, capsy
         assert code != 0 and not out
     with sqlite3.connect(env.db) as conn:
         assert conn.execute('SELECT COUNT(*) FROM policy_trials').fetchone()[0] == 0
+
+
+def test_deferred_preview_is_read_only_scoped_and_rejects_counterfactual_threshold(env, capsys, monkeypatch):
+    import decisionpolicy
+    import decisiontrace
+    facts = dict(matches=1, where='indbakken', flagged=False, deleted=False,
+                 seen=False, old=False, mode='flag')
+    decision = decisionpolicy.decide_deferred('campaign_live', facts)
+    with sqlite3.connect(env.db) as conn:
+        decisiontrace.record(conn, 'bynet', 'private-id', 'campaign_live', decision, 1)
+        decisiontrace.record(conn, 'other-account', 'other-id', 'campaign_live', decision, 1)
+    original = env.db.read_bytes()
+    monkeypatch.setattr(engine, 'connect', lambda *a, **kw: pytest.fail('preview must not contact IMAP'))
+    code, out, err = run(capsys, monkeypatch, 'policy-preview', 'bynet', '--stage', 'campaign_live')
+    assert code == 0 and not err
+    result = json.loads(out)
+    assert result['sampled'] == 1 and result['invalid'] == 0
+    assert result['items'][0]['baseline_matches_current_policy']
+    assert result['items'][0]['candidate_reason'] == 'campaign_live_flag'
+    assert 'private-id' not in out and 'other-account' not in out
+    assert not result['automatic_activation']
+    code, out, err = run(capsys, monkeypatch, 'policy-preview', 'bynet', '--stage',
+                         'campaign_live', '--threshold', '12')
+    assert code != 0 and 'ny grænse' in err
+    assert env.db.read_bytes() == original
+    assert audit_records(env) == []

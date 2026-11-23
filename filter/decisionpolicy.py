@@ -3,7 +3,8 @@
 The engine resolves account-scoped sender rules and content-bound prior verdicts
 before calling decide(). Version 1 preserves the 2.15.0 ordering, including
 explicit sticky releases before threat handling. New reason codes are metadata.
-This is the shared initial-scan/pending-move core, not every later AI/ZAP action.
+The initial-scan/pending-move core and deferred AI/campaign profiles share this
+boundary. Adapters still resolve live IMAP state and perform guarded side effects.
 """
 from __future__ import annotations
 
@@ -162,3 +163,97 @@ def decide(prior: Any, rule: Any, final: float, names: frozenset, *, threshold: 
     if prior is not None and prior["user_verdict"] == "spam":
         return Decision(True, None, reason="user_spam", note="user verdict spam")
     return Decision(over, None if over else "none")
+
+
+# Deferred sources deliberately have distinct profiles. Campaign consensus
+# may act below the normal scan threshold; AI never supplies a ham exception.
+# They share this pure policy boundary and the same trace/result format.
+DEFERRED_POLICY_VERSION = 1
+
+
+def ai_skip_reason(facts: dict) -> str | None:
+    if not facts['present']:
+        return 'gone'
+    if facts['user_verdict'] or facts['action'] not in (None, 'none'):
+        return 'decided'
+    if facts['threat']:
+        return 'threat'
+    if not facts['folder_matches']:
+        return 'moved'
+    if facts['contact']:
+        return 'contact'
+    if facts['namespoof']:
+        return 'namespoof'
+    if facts['has_ai']:
+        return 'done'
+    return None
+
+
+def _ai_deferred(f: dict) -> Decision:
+    why = ('off' if f['mode'] != 'on' else 'account_mode' if f['account_mode'] != 'move'
+           else 'late' if f['late'] else ai_skip_reason(f))
+    if why is not None:
+        return Decision(False, 'skipped:' + why, reason='ai_' + why)
+    spam = f['final'] >= max(f['threshold'], f['original_threshold'])
+    return Decision(spam, 'pending_move' if spam else 'points', reason='ai_score')
+
+
+def _campaign_context(f: dict) -> Decision:
+    checks = [
+        (not f['present'], 'unknown', 'ukendt'),
+        (not f['source_active'], 'source', 'kilden er ikke længere spam'),
+        (bool(f['user_verdict']) or f['sticky_ham'], 'user', 'brugerens afgørelse'),
+        (f['action'] not in ('none', 'newsletter_pending', 'newsletter_moved') and not
+         (f['mode'] == 'shadow' and f['action'] == 'shadow_spam'), 'changed', f"ændret ({f['action']})"),
+        (f['action'] == 'newsletter_moved' and not f['folder_matches'], 'folder', 'ikke i nyhedsbrevsmappen'),
+        (f['action'] != 'newsletter_moved' and not f['folder_matches'], 'folder', 'ikke i indbakken'),
+        (f['old'], 'old', 'ældre end 3 døgn'),
+        (f['trusted'], 'contact', 'kendt afsender'),
+        (f['allowed'], 'allow', 'tilladt afsender'),
+        (f['own_sender'], 'own', 'egen afsender'),
+        (f['protected_allow'], 'protected', 'beskyttet adresse med Tillad-regel'),
+    ]
+    for stop, code, note in checks:
+        if stop:
+            return Decision(False, 'skipped', reason='campaign_' + code, note=note)
+    return Decision(True, 'eligible', reason='campaign_context')
+
+
+def _campaign_score(f: dict) -> Decision:
+    floor = f['threshold'] - f['margin']
+    if (f['score'] is None or f['score'] < floor) and not f['consensus']:
+        return Decision(False, 'skipped', reason='campaign_floor', note='under scoregulvet')
+    if f['mode'] in ('move', 'flag') and f['hourly_used'] >= f['hourly_limit']:
+        return Decision(False, 'deferred', reason='campaign_rate')
+    return Decision(True, 'eligible', reason='campaign_score')
+
+
+def _campaign_live(f: dict) -> Decision:
+    for stop, code, note in (
+        (f['matches'] == 0, 'missing', 'ikke længere i ' + f['where']),
+        (f['matches'] > 1, 'ambiguous', 'flere mails med samme Message-ID'),
+        (f['flagged'], 'flagged', 'stjernemarkeret'),
+        (f['deleted'], 'deleted', 'markeret slettet'),
+        (f['seen'], 'read', 'læst'),
+        (f['old'], 'old', 'ældre end 3 døgn'),
+    ):
+        if stop:
+            return Decision(False, 'skipped', reason='campaign_' + code, note=note)
+    action = f['mode'] if f['mode'] in ('move', 'flag') else 'shadow'
+    return Decision(True, action, reason='campaign_live_' + action)
+
+
+def decide_deferred(profile: str, facts: dict) -> Decision:
+    """Pure delayed eligibility: resolved facts only, no sender/body/SQL/IMAP.
+
+    Context, score budget, and live mailbox checks are separately recorded
+    phases. Replay reproduces that phase; it never implies a mailbox action.
+    """
+    handlers = {'ai': _ai_deferred, 'campaign_context': _campaign_context,
+                'campaign_score': _campaign_score, 'campaign_live': _campaign_live}
+    if profile not in handlers:
+        raise ValueError('Ukendt profil for forsinket afgørelse.')
+    decision = handlers[profile](facts)
+    decision.policy_version = DEFERRED_POLICY_VERSION
+    decision.policy_input = dict(profile=profile, facts=dict(facts))
+    return decision

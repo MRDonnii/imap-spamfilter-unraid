@@ -571,3 +571,18 @@ def test_brand_domains_mirror_the_rspamd_map():
     import siteconfig
     assert campaigns.BRAND_DOMAINS == doms | set(siteconfig.get_list("mail_domains"))
     assert not doms & set(siteconfig.get_list("mail_domains"))     # never in the repository map
+
+
+def test_campaign_phases_replay_without_subject_sender_or_body(eng, monkeypatch):
+    import decisiontrace
+    p = Pair(eng, monkeypatch)
+    p.mail(p.a, 'trace-source@x')
+    p.mail(p.b, 'trace-target@x', body='PRIVATE CAMPAIGN BODY')
+    p.junk_in_a('trace-source@x')
+    p.pass_(p.b)
+    rows = p.b.db.conn.execute("SELECT stage,snapshot FROM decision_traces WHERE account='b' "
+                              "AND stage LIKE 'campaign_%'").fetchall()
+    assert {r[0] for r in rows} == {'campaign_context', 'campaign_score', 'campaign_live'}
+    for stage, snapshot in rows:
+        assert all(secret not in snapshot for secret in ('PRIVATE CAMPAIGN BODY', SPAMMER, SUBJ))
+        assert decisiontrace.replay(snapshot) == json.loads(snapshot)['result']
