@@ -1,11 +1,14 @@
 # Ændringslog
 
-## Under udvikling efter 2.16.0-beta
+## 2.17.0 — 2026-11-23 (beta)
 
 - Forsinkede AI- og kampagneafgørelser bruger særskilte profiler i den fælles
   rene beslutningsmotor med lokale, kontoafgrænsede input/resultat-spor.
   `sfctl policy-preview --stage` gengiver de enkelte faser skrivebeskyttet.
   Eksisterende prioritering, kampagnekonsensus og scoregulve bevares.
+- Kampagner genkontrollerer brugerafgørelser, tilladelser, scoregulv og
+  stoptilstand efter langsomme IMAP-kald. En frigivelse eller aflysning under
+  kontrollen må ikke overskrives med en flytning eller spammarkering.
 
 - Et personligt valg om at flytte et legitimt, etableret nyhedsbrev til spam
   starter ikke længere kampagneafgørelser på andre postkasser. Den eksisterende

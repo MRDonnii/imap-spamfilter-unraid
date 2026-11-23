@@ -128,7 +128,7 @@ RELOAD_FILE = STATE_DIR / "reload_requested"
 STATIC_DIR = Path(__file__).with_name("static")
 FAVICON_PATH = Path(__file__).with_name("favicon.png")
 
-FALLBACK_VERSION = "2.16.0"
+FALLBACK_VERSION = "2.17.0"
 DASHBOARD_PORT = 8080
 PBKDF2_ITERATIONS = 600_000
 SESSION_LIFETIME = 12 * 3600      # absolute
@@ -169,7 +169,7 @@ MAIL_CODE_WINDOW = 15 * 60        # ... per this window (all purposes)
 MAIL_CODE_COOLDOWN = 60           # seconds between two sends
 
 # Legacy TRUSTED_PROXY=1 (2.0, trusted any peer) maps to the private ranges.
-LEGACY_PROXY_SPEC = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
+LEGACY_PROXY_SPEC = "127.0.0.0/8,::1/128,10.0.0.0/8,172.17.0.0/12,192.168.0.0/16,fc00::/7"
 
 
 def configure_paths(state_dir: Path | str | None = None, config_path: Path | str | None = None) -> None:
@@ -966,7 +966,7 @@ def forget_user_meta(name: str) -> None:
 LOGIN_SCOPES = ("everywhere", "local")
 LOGIN_SCOPE_TEXT = {"everywhere": "Overalt", "local": "Kun lokalt (hjemmenetværket)"}
 LOGIN_SCOPE_SHORT = {"everywhere": "Overalt", "local": "Kun lokalt"}
-LOCAL_NETWORKS_DEFAULT = "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7,fe80::/10"
+LOCAL_NETWORKS_DEFAULT = "127.0.0.0/8,10.0.0.0/8,172.17.0.0/12,192.168.0.0/16,::1/128,fc00::/7,fe80::/10"
 LOCAL_NETS: tuple = ()
 LOCAL_NETWORKS_SPEC = ""
 _PROXY_MARKERS = ("HTTP_X_FORWARDED_FOR", "HTTP_CF_CONNECTING_IP", "HTTP_CF_RAY", "HTTP_FORWARDED",

@@ -726,8 +726,7 @@ def _policy(eng: Any, db: Any, msgid: str, profile: str, facts: dict, now: int):
     return decision
 
 
-def _one(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, inbox: str, uv: int, r: Any,
-         now: int) -> str:
+def _context_input(eng: Any, db: Any, acc: Any, inbox: str, r: Any, now: int):
     msgid = r["message_id"]
     row = db.get_message(msgid)
     action = (_row(row, 'our_action') or 'none') if row is not None else 'none'
@@ -751,9 +750,10 @@ def _one(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, inbox: 
                            or _allowed(eng, db.conn, acc.name, addr),
                    own_sender=any(_under(addr.rpartition('@')[2], d) for d in _own_for(acc)),
                    protected_allow=bool(rcpt and _allowed(eng, db.conn, acc.name, rcpt)))
-    decision = _policy(eng, db, msgid, 'campaign_context', context, now)
-    if not decision.spam:
-        return _skip(db, r, decision.note, now=now)
+    return row, action, folder, context
+
+
+def _score_input(db: Any, acc: Any, r: Any, row: Any, now: int) -> dict:
     # Score floor: the copy itself must already look like spam to this
     # mailbox, unless several users / mailboxes agree independently.
     try:
@@ -768,6 +768,17 @@ def _one(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, inbox: 
         consensus = src is not None and independent_verdicts(db.conn, src[0]) >= MIN_INDEPENDENT_VERDICTS
     budget = dict(score=score, threshold=threshold, margin=SCORE_FLOOR_MARGIN, consensus=consensus,
                   mode=acc.mode, hourly_used=_hourly_used(db, now), hourly_limit=MAX_MOVES_PER_HOUR)
+    return budget
+
+
+def _one(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, inbox: str, uv: int, r: Any,
+         now: int) -> str:
+    msgid = r["message_id"]
+    row, action, folder, context = _context_input(eng, db, acc, inbox, r, now)
+    decision = _policy(eng, db, msgid, 'campaign_context', context, now)
+    if not decision.spam:
+        return _skip(db, r, decision.note, now=now)
+    budget = _score_input(db, acc, r, row, now)
     decision = _policy(eng, db, msgid, 'campaign_score', budget, now)
     if decision.action == 'skipped':
         return _skip(db, r, decision.note, now=now)
@@ -779,19 +790,21 @@ def _one(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, inbox: 
     if folder != inbox:
         fuv = eng.select_with_uidvalidity_check(client, db, folder, log_, readonly=acc.mode == "shadow")
     try:
-        return _act(eng, client, db, log_, acc, folder, fuv, r, row, action, now)
+        return _act(eng, client, db, log_, acc, folder, fuv, r, row, action, now, inbox=inbox)
     finally:
         if folder != inbox:
             eng.select_with_uidvalidity_check(client, db, inbox, log_, readonly=acc.mode == "shadow")
 
 
 def _act(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, folder: str, uv: int, r: Any,
-         row: Any, action: str, now: int) -> str:
+         row: Any, action: str, now: int, *, inbox: str) -> str:
     """The live checks in `folder` (selected) and the move / flag / record."""
     msgid = r["message_id"]
     where = "indbakken" if action != NEWSLETTER_MOVED else "nyhedsbrevsmappen"
     uids = list(eng.find_uids_by_message_id(client, msgid) or [])
-    data = (client.fetch([int(uids[0])], [b"FLAGS", b"INTERNALDATE"]).get(int(uids[0])) or {}) if len(uids) == 1 else {}
+    data = {}
+    if len(uids) == 1:
+        data = client.fetch([int(uids[0])], [b"FLAGS", b"INTERNALDATE"]).get(int(uids[0])) or {}
     flags = eng._flag_names(data.get(b"FLAGS"))
     idate = eng._internaldate_ts(data)
     live = dict(matches=len(uids), where=where, flagged='\\Flagged' in flags,
@@ -800,6 +813,28 @@ def _act(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, folder:
     decision = _policy(eng, db, msgid, 'campaign_live', live, now)
     if not decision.spam:
         return _skip(db, r, decision.note, now=now)
+    # SEARCH/FETCH may block while another writer rescues the source/copy,
+    # adds an allow rule, raises the floor or stops the account. Re-resolve
+    # the same pure profiles after the network boundary, before side effects.
+    if eng.SHUTDOWN.is_set() or db.in_safe_mode('all'):
+        return 'deferred'
+    queued = db.conn.execute("SELECT status FROM campaign_queue WHERE account=? AND message_id=?",
+                             (db.account, msgid)).fetchone()
+    if queued is None or queued[0] != 'queued':
+        return 'skipped'  # preserve another writer's cancellation/status
+    row, fresh_action, fresh_folder, context = _context_input(eng, db, acc, inbox, r, int(eng._now()))
+    check = _policy(eng, db, msgid, 'campaign_context', context, now)
+    if not check.spam:
+        return _skip(db, r, check.note, now=now)
+    if fresh_folder != folder or fresh_action != action:
+        return _skip(db, r, 'ændret under kontrol', now=now)
+    check = _policy(eng, db, msgid, 'campaign_score', _score_input(db, acc, r, row, int(eng._now())), now)
+    if not check.spam:
+        if check.action == 'deferred':
+            return 'deferred'
+        return _skip(db, r, check.note, now=now)
+    live['mode'] = acc.mode
+    decision = _policy(eng, db, msgid, 'campaign_live', live, now)
     uid = int(uids[0])
     if decision.action == "move":
         with db.tx():

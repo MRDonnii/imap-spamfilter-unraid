@@ -4,7 +4,7 @@
 #
 # Build ONLY through deploy/aio/build.sh (it stages a minimal build context
 # - no secrets, no tests - and passes the pinned ARGs from versions.env):
-#   deploy/aio/build.sh                 # -> imap-spamfilter-unraid:2.16.0
+#   deploy/aio/build.sh                 # -> imap-spamfilter-unraid:2.17.0
 # The Dockerfile uses no BuildKit-only syntax, so Unraid's classic builder
 # and CI's buildx both work.
 #
@@ -111,7 +111,7 @@ FROM ${REDIS_IMAGE} AS redis
 # ------------------------------------------------------------------ final
 FROM ${RSPAMD_IMAGE}
 USER root
-ARG AIO_VERSION=2.16.0
+ARG AIO_VERSION=2.17.0
 ARG EXPECT_RSPAMD=4.2.2
 ARG EXPECT_REDIS=8.10.3
 ARG EXPECT_UNBOUND=1.26

@@ -1,4 +1,4 @@
-# Spamfilter til Unraid (version 2.16.0)
+# Spamfilter til Unraid (version 2.17.0)
 
 Et selvhostet spamfilter til familiens og firmaets postkasser. Fra 2.4 kører det i **én Docker-container**, `spamfilter`, på en Unraid-server. Postkasserne bliver hos deres udbydere (fx Gigahost eller Scannet, som filteret kender særligt godt). Filteret logger ind via krypteret IMAP, vurderer nye ulæste mails inden for størrelsesgrænsen i indbakken og flytter spam over i mappen **Spamfilter** i samme postkasse.
 
