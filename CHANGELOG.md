@@ -13,6 +13,9 @@
 - Frigivelse/legitim-afgørelse nulstiller tællegrundlaget og fortryder en
   uændret automatisk blokering, også uden automatisk tilladelse. Håndlavede
   regler bevares; en fortrudt automatisk blokering genskabes ikke af sig selv.
+- Fortrydelse genvurderer også regelafhængige ventende flytninger. Kun
+  afgørelser, der alene skyldtes den fjernede automatiske regel, aflyses;
+  selvstændig spam/trussel/brugerafgørelse/aktuel regel bevares.
 
 ## 2.17.0 — 2026-11-23 (beta)
 

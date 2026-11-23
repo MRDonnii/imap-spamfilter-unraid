@@ -4312,7 +4312,30 @@ def _junk_rules_after_user_ham(db: Db, log: logging.Logger, acc: Account, msgid:
     """Inside the verdict transaction: undo only our own automatic block."""
     rid = _junkrules().reset_on_ham(db.conn, acc.name, sender, now=int(_now()))
     if rid is not None:
-        db.log_event('junk_auto_block_removed', msgid, detail=f'rule={rid}; user ham')
+        # This rule may have queued other copies during their grace period.
+        # Re-evaluate only its normal scan moves under current policy: an
+        # independent score/threat/manual verdict or another rule still wins.
+        waiting = db.conn.execute(
+            'SELECT m.*, p.threshold AS pending_threshold FROM messages m JOIN pending_move p '
+            'ON p.account=m.account AND p.message_id=m.message_id '
+            'WHERE m.account=? AND m.rule_hit=? AND p.origin IS NULL',
+            (acc.name, f'block:{rid}')).fetchall()
+        cancelled = 0
+        for candidate in waiting:
+            names = frozenset(json.loads(candidate['decision_names'])) if candidate['decision_names'] else frozenset(
+                x['n'] for x in _symbol_list(candidate['symbols']))
+            decision = _decide(db, acc, candidate, candidate['sender'], float(candidate['our_score'] or 0),
+                               names, set(), threshold=max(float(candidate['pending_threshold'] or acc.threshold),
+                                                           float(acc.threshold)),
+                               auth=parse_sender_auth(candidate['sender_auth']), threat=candidate['threat'],
+                               aged_unverified=bool(candidate['aged']) and
+                               'TH_AGED_UNVERIFIED' in (candidate['symbols'] or ''))
+            if not decision.spam:
+                db.drop_pending_moves_for(candidate['message_id'])
+                db.update_message(candidate['message_id'], our_action=decision.action or 'none',
+                                  rule_hit=decision.rule_hit)
+                cancelled += 1
+        db.log_event('junk_auto_block_removed', msgid, detail=f'rule={rid}; user ham; cancelled={cancelled}')
 
 
 def _auto_allow_sender(db: Db, log: logging.Logger, acc: Account, msgid: str,
@@ -6500,6 +6523,9 @@ def _execute_due_moves_in(client: IMAPClient, db: Db, log: logging.Logger, acc: 
         force_rule: sqlite3.Row | None = None
         if _journal_has(db, msgid):
             continue  # an interrupted move of this message awaits repair
+        if db.conn.execute('SELECT 1 FROM pending_move WHERE account=? AND uidvalidity=? AND uid=?',
+                           (db.account, uv, uid)).fetchone() is None:
+            continue  # a user action cancelled it while FETCH was in flight
         if uid not in fetched:
             skip = "move_skipped_missing"
         else:

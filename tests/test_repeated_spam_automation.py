@@ -148,3 +148,42 @@ def test_ham_does_not_delete_a_rule_the_admin_has_replaced(eng,monkeypatch):
     h.user_moves('admin-2@x','Spamfilter','INBOX')
     h.scan()
     assert [(r['id'],r['created_by']) for r in _rules(h)] == [(rid,'admin')]
+
+
+def test_undo_automatic_rule_also_cancels_a_pending_move_that_only_depended_on_it(eng,monkeypatch):
+    h=_harness(eng,monkeypatch)
+    h.acc.auto_allow_on_rescue=False
+    for i in range(3):_junk_one(h,f'pending-base-{i}@x')
+    h.deliver('waiting-low@x',score=2,sender=SENDER)
+    h.deliver('waiting-high@x',score=14,sender=SENDER)
+    h.scan()
+    assert h.row('waiting-low@x')['our_action']=='pending_move'
+    h.user_moves('pending-base-2@x','Spamfilter','INBOX')
+    h.scan()
+    assert not _rules(h)
+    h.advance(61)
+    h.moves()
+    assert 'waiting-low@x' in h.client.msgids('INBOX')
+    assert 'waiting-high@x' in h.client.msgids('Spamfilter')
+
+
+def test_pending_automatic_rule_undo_during_fetch_is_respected(eng,monkeypatch):
+    h=_harness(eng,monkeypatch)
+    for i in range(3):_junk_one(h,f'fetch-base-{i}@x')
+    h.deliver('fetch-waiting@x',score=2,sender=SENDER)
+    h.scan()
+    h.advance(61)
+    fetch=h.client.fetch
+    changed=[]
+    def fetch_then_undo(*args,**kwargs):
+        data=fetch(*args,**kwargs)
+        if not changed:
+            changed.append(True)
+            with h.db.tx():
+                eng._junk_rules_after_user_ham(h.db,LOG,h.acc,'fetch-base-2@x',SENDER)
+        return data
+    monkeypatch.setattr(h.client,'fetch',fetch_then_undo)
+    h.moves()
+    assert changed
+    assert 'fetch-waiting@x' in h.client.msgids('INBOX')
+    assert not _rules(h)

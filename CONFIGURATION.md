@@ -710,3 +710,8 @@ uden mailtekst. Udløbne rækker ryddes ved normale beskedoprydninger og nye
 rettelser. Blokering/fortrydelse vises i hændelser og eksisterende Tjek disse.
 Dette hjælper ved gentagen spam fra samme adresse; skiftende afsendere bliver
 fortsat behandlet af eksisterende scoring, Bayes, fuzzy og kampagneværn.
+
+Når en automatisk regel fortrydes, genvurderes også ventende normale
+scanningsflytninger fra netop den regel. Flytninger, der alene beroede på den,
+aflyses. Selvstændig spam-score, trussel, brugerens spamdom eller en anden
+aktuel regel bevares; allerede flyttede andre mails flyttes ikke tilbage.
