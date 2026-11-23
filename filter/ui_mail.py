@@ -134,6 +134,8 @@ EVENT_INFO: dict[str, tuple[str, str, str]] = {
     "junk_block_suggested": ("Forslag om at blokere afsenderen for postkassen", "ban", "info"),
     "learn_skip_newsletter": ("Ikke lært som spam – et almindeligt nyhedsbrev lærer ikke filteret noget",
                               "graduation-cap", "neutral"),
+    "campaign_local_preference": ("Dit nyhedsbrevsvalg ændrer ikke de andres post",
+                                  "mail", "neutral"),
     # 2.2
     "ham_guard": ("Ikke lært som legitim – læringsvagten stoppede det", "shield", "warn"),
     "own_domain_uribl": ("Jeres eget domæne stod på en domæneliste", "alert-triangle", "warn"),

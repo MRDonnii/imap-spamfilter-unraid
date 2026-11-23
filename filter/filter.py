@@ -2500,10 +2500,16 @@ def _campaigns() -> Any:
     return campaigns
 
 
-def _campaign_sweep(db: Db, log: logging.Logger, acc: Account, msgid: str, trigger: str) -> None:
+def _campaign_sweep(db: Db, log: logging.Logger, acc: Account, msgid: str, trigger: str,
+                    *, raw: bytes | None = None) -> None:
     """2.6 (A2): a user verdict spam -> queue the copies in every mailbox.
     Runs in the caller's transaction (savepoint); never raises."""
     try:
+        if legit_newsletter(raw, db.get_message(msgid), acc.threshold, db.conn):
+            # A personal bulk-mail preference is neither shared training nor
+            # evidence that the other family's copies are a spam campaign.
+            db.log_event("campaign_local_preference", msgid, detail="nyhedsbrev; ingen kampagne på andre konti")
+            return
         res = _campaigns().on_user_spam(
             db.conn, db.account, msgid, actor="user:move", trigger=trigger, now=int(_now()),
             own_domains=[*(getattr(acc, "owner_platform_domains", None) or ()),
@@ -7033,7 +7039,7 @@ def _junk_message_seen(db: Db, log: logging.Logger, acc: Account, fmap: dict[str
                 # 2.6 (A2): only the filter's own folder proves a user action
                 # - the provider may move mail into its junk folder itself
                 # after delivery.
-                _campaign_sweep(db, log, acc, msgid, "user_junked")
+                _campaign_sweep(db, log, acc, msgid, "user_junked", raw=body)
             log.info("user moved %s to %s", msgid, junk)
             return
         if (prior["current_folder"] == inbox and junk == fmap["junk"]

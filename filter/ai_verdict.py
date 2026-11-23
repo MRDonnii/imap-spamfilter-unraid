@@ -783,12 +783,12 @@ def parse_reply(content: Any) -> tuple[str, float, str, bool]:
         text = str(content or "")[:REPLY_MAX]
         try:
             data = json.loads(text)
-        except ValueError:
+        except (ValueError, RecursionError):
             m = re.search(r"\{.*\}", text, re.S)
             if m:
                 try:
                     data = json.loads(m.group(0))
-                except ValueError:
+                except (ValueError, RecursionError):
                     data = None
     if not isinstance(data, dict):
         return "unsure", 0.0, "", False

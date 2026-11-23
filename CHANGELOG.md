@@ -1,5 +1,14 @@
 # Ændringslog
 
+## Under udvikling efter 2.16.0-beta
+
+- Et personligt valg om at flytte et legitimt, etableret nyhedsbrev til spam
+  starter ikke længere kampagneafgørelser på andre postkasser. Den eksisterende
+  beskyttelse mod Bayes/fuzzy-læring af sådanne valg bevares.
+- Syntetiske AI-prøver omfatter falske systemroller, instruktioner og delimiters
+  i maildata samt ugyldige/dybt indlejrede svar. Parseren håndterer også
+  decoderens rekursionsfejl som ugyldigt svar med normal backoff.
+
 ## 2.16.0 — 2026-11-23 (beta)
 
 - Drift samler antivirusstatus/signaturalder og antal/alder for ventende

@@ -82,6 +82,22 @@ def events(h, name):
                                                 "ORDER BY id", (name,))]
 
 
+def test_unwanted_established_newsletter_is_not_a_campaign_for_other_mailboxes(eng, monkeypatch):
+    p = Pair(eng, monkeypatch)
+    p.mail(p.a, "local-newsletter@x", extra_headers="List-Unsubscribe: <https://news.example/unsubscribe>")
+    p.a.db.update_message("local-newsletter@x", symbols=json.dumps([
+        {"n": "TH_NEWSLETTER", "s": -1.5}, {"n": "TH_ESTABLISHED", "s": -2.0}]))
+    p.mail(p.b, "other-copy@x")
+    p.junk_in_a("local-newsletter@x")
+    assert not queue(p.b)
+    p.pass_(p.b)
+    assert p.b.row("other-copy@x")["our_action"] == "none"
+    p.advance(p.a.acc.learn_grace_seconds + 60)
+    p.a.eng.process_pending_learns(p.a.client, p.a.db, LOG, p.a.acc, p.a.acc.folder_map)
+    assert not p.a.rspamd.learn_calls
+    assert p.a.row("local-newsletter@x")["user_verdict"] == "spam"
+
+
 # ---------------------------------------------------------------- the flow
 
 

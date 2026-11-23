@@ -632,3 +632,25 @@ Et forsinket AI-svar bruger den højeste af den oprindelige effektive grænse
 og kontoens aktuelle grænse. En hævning før en ventende ren AI-scoreflytning
 kan også aflyse den. Manuelle spamafgørelser, eksplicitte blokeringer og
 registrerede trusler bevarer deres særregler.
+
+
+### Personlige præferencer og fælles læring (næste udviklingsversion)
+
+Bayes og lokal fuzzy er delte signaler. En eksplicit handling **Lær som spam**
+er derfor træningsdata for den fælles model. Senderregler, kontakt-demotion og
+nyhedsbrevsvalg er derimod knyttet til den konkrete konto. Kampagnekopier læres
+ikke som ekstra spam-eksemplarer; kildens brugerafgørelse kan ellers tælle flere gange.
+
+Et almindeligt, etableret nyhedsbrev, som én person flytter til Spamfilter,
+beholder personens lokale spamafgørelse, men udløser hverken fælles Bayes/fuzzy-
+læring eller en automatisk kampagne på de andre konti. Det kræver den eksisterende
+kombination af List-Unsubscribe, TH_NEWSLETTER, tidligere afsenderhistorik,
+score under kontogrænsen og fravær af registrerede trusler/spamsignaler. En
+DKIM-signatur alene er ikke tilstrækkelig: rigtig spam fra nye signerede domæner
+skal stadig kunne læres og genkendes på tværs af postkasser.
+
+Det er ikke fuldstændigt isolerede Bayes-modeller pr. person. Menneskeligt
+bekræftet træning kan fortsat påvirke det delte signal. Den faktisk målte effekt
+kræver de særskilte evalueringsprøver; ingen familiepost er brugt i kodens prøver.
+AI-prøverne dokumenterer grænserne i appens prompt/protokol og efterbehandling,
+ikke at enhver konkret model modstår enhver prompt-injektion.
