@@ -187,3 +187,21 @@ def test_pending_automatic_rule_undo_during_fetch_is_respected(eng,monkeypatch):
     assert changed
     assert 'fetch-waiting@x' in h.client.msgids('INBOX')
     assert not _rules(h)
+
+
+@pytest.mark.parametrize('set_undone',[False,True])
+def test_remove_automatic_block_button_is_respected_for_waiting_mail(eng,monkeypatch,set_undone):
+    h=_harness(eng,monkeypatch)
+    for i in range(3):_junk_one(h,f'button-base-{i}@x')
+    h.deliver('button-low@x',score=2,sender=SENDER)
+    h.deliver('button-high@x',score=14,sender=SENDER)
+    h.scan()
+    rid=_rules(h)[0]['id']
+    with h.db.tx():
+        eng.delete_sender_rule(h.db.conn,rid)
+        if set_undone:
+            junkrules.decide(h.db.conn,h.acc.name,SENDER,'suggest','undone','admin',now=int(h.t))
+    h.advance(61)
+    h.moves()
+    assert 'button-low@x' in h.client.msgids('INBOX')
+    assert 'button-high@x' in h.client.msgids('Spamfilter')

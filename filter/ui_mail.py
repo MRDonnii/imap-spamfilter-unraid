@@ -132,6 +132,7 @@ EVENT_INFO: dict[str, tuple[str, str, str]] = {
                            "alert-triangle", "warn"),
     "junk_auto_block": ("Afsenderen er blokeret for postkassen efter gentagne spamrettelser", "ban", "warn"),
     "junk_auto_block_removed": ("Automatisk spamblokering fjernet efter brugerens rettelse", "undo", "ok"),
+    "move_skipped_auto_block": ("Flytning aflyst efter fortrudt automatisk spamblokering", "undo", "neutral"),
     "junk_block_suggested": ("Forslag om at blokere afsenderen for postkassen", "ban", "info"),
     "learn_skip_newsletter": ("Ikke lært som spam – et almindeligt nyhedsbrev lærer ikke filteret noget",
                               "graduation-cap", "neutral"),

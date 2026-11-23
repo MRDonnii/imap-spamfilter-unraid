@@ -159,6 +159,7 @@ EVENT_LABELS: dict[str, tuple[str, str]] = {
     "junk_rule_conflict": ("Flyttet til Junk trods en tilladelse (Tjek disse)", "warn"),
     "junk_auto_block": ("Afsender blokeret for kontoen efter gentagen spam", "warn"),
     "junk_auto_block_removed": ("Automatisk spamblokering fjernet efter brugerens rettelse", "ok"),
+    "move_skipped_auto_block": ("Flytning aflyst efter fortrudt automatisk spamblokering", "neutral"),
     "junk_block_suggested": ("Forslag: bloker afsenderen for kontoen", "info"),
     "learn_skip_newsletter": ("Ikke lært som spam – almindeligt nyhedsbrev", "neutral"),
     "campaign_local_preference": ("Personligt nyhedsbrevsvalg – andre konti er uberørte", "neutral"),

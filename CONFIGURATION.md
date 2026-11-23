@@ -715,3 +715,5 @@ Når en automatisk regel fortrydes, genvurderes også ventende normale
 scanningsflytninger fra netop den regel. Flytninger, der alene beroede på den,
 aflyses. Selvstændig spam-score, trussel, brugerens spamdom eller en anden
 aktuel regel bevares; allerede flyttede andre mails flyttes ikke tilbage.
+Fortrydelse via **Fjern blokeringen** i Tjek disse bliver også genkontrolleret
+før en ventende flytning. Uafhængig spambegrundelse bevares på samme måde.

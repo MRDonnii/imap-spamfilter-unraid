@@ -4322,20 +4322,23 @@ def _junk_rules_after_user_ham(db: Db, log: logging.Logger, acc: Account, msgid:
             (acc.name, f'block:{rid}')).fetchall()
         cancelled = 0
         for candidate in waiting:
-            names = frozenset(json.loads(candidate['decision_names'])) if candidate['decision_names'] else frozenset(
-                x['n'] for x in _symbol_list(candidate['symbols']))
-            decision = _decide(db, acc, candidate, candidate['sender'], float(candidate['our_score'] or 0),
-                               names, set(), threshold=max(float(candidate['pending_threshold'] or acc.threshold),
-                                                           float(acc.threshold)),
-                               auth=parse_sender_auth(candidate['sender_auth']), threat=candidate['threat'],
-                               aged_unverified=bool(candidate['aged']) and
-                               'TH_AGED_UNVERIFIED' in (candidate['symbols'] or ''))
+            decision = _auto_block_pending_decision(db, acc, candidate, candidate['pending_threshold'])
             if not decision.spam:
                 db.drop_pending_moves_for(candidate['message_id'])
                 db.update_message(candidate['message_id'], our_action=decision.action or 'none',
                                   rule_hit=decision.rule_hit)
                 cancelled += 1
         db.log_event('junk_auto_block_removed', msgid, detail=f'rule={rid}; user ham; cancelled={cancelled}')
+
+
+def _auto_block_pending_decision(db: Db, acc: Account, msg: sqlite3.Row, threshold: float | None) -> Decision:
+    """Resolve remaining score/rules without a reversed automatic rule."""
+    names = frozenset(json.loads(msg['decision_names'])) if msg['decision_names'] else frozenset(
+        x['n'] for x in _symbol_list(msg['symbols']))
+    return _decide(db, acc, msg, msg['sender'], float(msg['our_score'] or 0), names, set(),
+                   threshold=max(float(threshold or acc.threshold), float(acc.threshold)),
+                   auth=parse_sender_auth(msg['sender_auth']), threat=msg['threat'],
+                   aged_unverified=bool(msg['aged']) and 'TH_AGED_UNVERIFIED' in (msg['symbols'] or ''))
 
 
 def _auto_allow_sender(db: Db, log: logging.Logger, acc: Account, msgid: str,
@@ -6556,8 +6559,21 @@ def _execute_due_moves_in(client: IMAPClient, db: Db, log: logging.Logger, acc: 
                         current_allow = None
                 else:
                     current_allow = None
+            auto_undo = None
+            hit = str(_row_get(msg, 'rule_hit') or '')
+            if hit.startswith('block:'):
+                automatic_rule = db.conn.execute(
+                    "SELECT 1 FROM junk_sender_notes WHERE account=? AND sender=? AND kind='suggest' "
+                    "AND status IN ('auto_blocked','undone') AND CAST(block_rule_id AS TEXT)=?",
+                    (db.account, _junkrules()._addr(_row_get(msg, 'sender')), hit.partition(':')[2])).fetchone()
+                if automatic_rule is not None:
+                    # Covers the existing Tjek disse undo button as well as
+                    # rescued mail, including a reversal during live FETCH.
+                    auto_undo = _auto_block_pending_decision(db, acc, msg, _row_get(r, 'threshold'))
             if _sticky_ham(msg):
                 skip = "move_skipped_verdict"
+            elif auto_undo is not None and not auto_undo.spam:
+                skip = 'move_skipped_auto_block'
             elif current_allow is not None:
                 force_rule = current_allow
                 skip = "move_skipped_rule"
@@ -6590,6 +6606,8 @@ def _execute_due_moves_in(client: IMAPClient, db: Db, log: logging.Logger, acc: 
                 db.log_event(skip, msgid, detail=f"uid={uid}")
                 if skip in ("move_skipped_user_flag", "zap_skipped_read", "move_skipped_threshold"):
                     db.update_message(msgid, our_action="none")
+                elif skip == 'move_skipped_auto_block':
+                    db.update_message(msgid, our_action=auto_undo.action or 'none', rule_hit=auto_undo.rule_hit)
                 elif skip == "move_skipped_rule":
                     db.update_message(msgid, our_action="allowlisted", rule_hit=f"allow:{force_rule['id']}")
                     db.bump("allowlisted")
