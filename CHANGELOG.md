@@ -1,5 +1,15 @@
 # Ændringslog
 
+## 2.19.2 — 2026-11-25 (beta)
+
+- **Tjek disse viser kun det, der kan være en god mail:** En grænsemail vises ikke længere, når den næsten sikkert
+  er spam: AI'en har kaldt den spam eller phishing med høj sikkerhed, eller det er første mail fra en helt ukendt
+  afsender, som enten ikke består DMARC eller har et faretegn (lokkeemne, snydetegn, nyt domæne, misbrugt
+  topdomæne, falsk brand, kendt spamindhold). Målt på 3 ugers rigtig post: listen ville være faldet fra 69 til 20
+  mails, og alle 10 mails, som folk faktisk frigav, ville stadig være vist (de kom alle fra afsendere, man havde fået
+  mail fra før). En ny afsender med DMARC og uden faretegn (fx en ny webshop) vises som før.
+- Kortet siger, hvor mange der er skjult og hvorfor, med **Vis dem alligevel**. Telefonbeskeden springer dem også over.
+
 ## 2.19.1 — 2026-11-25 (beta)
 
 - **Tjek disse viser ikke længere afsendere, du allerede har kaldt spam:** En mail, der kun står under Tjek disse,

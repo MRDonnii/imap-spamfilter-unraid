@@ -60,7 +60,7 @@ def test_review_hides_judged_senders_and_offers_show_all(tmp_path, monkeypatch):
     assert "Glem toilettet" not in review                       # zoo-friends: already called spam
     assert "Andet emne" in review                               # new sender: still offered
     assert "Beskyttet" in review                                # protected address: always offered
-    assert "3 mails fra afsendere, du allerede har kaldt spam" in review and "tjek=alle" in review
+    assert "3 mails vises ikke" in review and "tjek=alle" in review
     review = _review(c.get("/spam?tjek=alle").get_data(as_text=True))
     assert "Glem toilettet 0" in review and "Skjul dem igen" in review
 
@@ -87,4 +87,34 @@ def test_all_hidden_shows_a_slim_card(tmp_path, monkeypatch):
     c = e.app.test_client()
     login(c)
     html = c.get("/spam").get_data(as_text=True)
-    assert "review-card-empty" in html and "1 mail fra afsendere, du allerede har kaldt spam" in html and "Vis den alligevel" in html
+    assert "review-card-empty" in html and "1 mail vises ikke, fordi den næsten sikkert er spam" in html
+    assert "Vis den alligevel" in html
+
+
+def test_obvious_spam_rules():
+    assert judged.obvious_spam(set(), True) == "ai"
+    assert judged.obvious_spam({"TH_FIRST_CONTACT"}, False) == "first_contact"                 # no DMARC
+    assert judged.obvious_spam({"TH_FIRST_CONTACT", "DMARC_POLICY_ALLOW"}, False) == ""          # a new, real sender
+    assert judged.obvious_spam({"TH_FIRST_CONTACT", "DMARC_POLICY_ALLOW", "TH_LURE_SUBJECT"}, False) == "first_contact"
+    assert judged.obvious_spam({"DMARC_POLICY_ALLOW", "TH_LURE_SUBJECT"}, False) == ""          # sender seen before
+
+
+def test_review_hides_first_contact_and_ai_sure_spam(tmp_path, monkeypatch):
+    e = make_admin_env(tmp_path, monkeypatch)
+    insert_message(e.conn, "bynet", "<fc@x>", sender="a@ny.example", subject="Ukendt uden DMARC",
+                   symbols=[{"n": "TH_FIRST_CONTACT", "s": 1.0}], **CAUGHT)
+    insert_message(e.conn, "bynet", "<fcd@x>", sender="b@ny2.example", subject="Ny butik med DMARC",
+                   symbols=[{"n": "TH_FIRST_CONTACT", "s": 1.0}, {"n": "DMARC_POLICY_ALLOW", "s": -0.5}], **CAUGHT)
+    insert_message(e.conn, "bynet", "<ai@x>", sender="c@kendt.example", subject="AI er sikker", **CAUGHT)
+    insert_message(e.conn, "bynet", "<shop@x>", sender="d@butik.example", subject="Black Friday fra butikken", **CAUGHT)
+    e.conn.execute("CREATE TABLE IF NOT EXISTS ai_verdicts(account TEXT, message_id TEXT, verdict TEXT, "
+                   "confidence REAL, created_at INTEGER)")
+    e.conn.execute("INSERT INTO ai_verdicts(account, message_id, mode, status, verdict, confidence, created_at) "
+                   "VALUES('bynet', '<ai@x>', 'on', 'ok', 'phishing', 0.9, ?)", (NOW,))
+    e.conn.commit()
+    c = e.app.test_client()
+    login(c)
+    review = _review(c.get("/spam").get_data(as_text=True))
+    assert "Ukendt uden DMARC" not in review and "AI er sikker" not in review
+    assert "Ny butik med DMARC" in review and "Black Friday fra butikken" in review
+    assert "2 mails vises ikke" in review

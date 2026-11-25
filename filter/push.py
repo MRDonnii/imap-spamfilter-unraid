@@ -1254,6 +1254,7 @@ def on_review(conn: sqlite3.Connection, acc: Any, *, now: int | None = None) -> 
         n = 0
         cache: dict[str, int] = {}
         judged_keys: set[str] | None = None
+        ai_sure: set[tuple[str, str]] | None = None
         for r in rows:
             addr = _addr_of(r["sender"])
             if addr and addr not in cache:
@@ -1266,7 +1267,11 @@ def on_review(conn: sqlite3.Connection, acc: Any, *, now: int | None = None) -> 
 
                 if judged_keys is None:
                     judged_keys = judged.judged_spam(conn, t)
+                    ai_sure = judged.ai_sure_spam(conn, t)
                 if judged_keys and judged.already_judged(r["sender"], judged_keys):
+                    continue
+                if judged.obvious_spam(_symbol_names(r["symbols"]),
+                                       (account, str(r["message_id"])) in (ai_sure or set())):
                     continue
             n += 1
         with _tx(conn):

@@ -1381,6 +1381,18 @@ def _judged_spam() -> set[str]:
     return g._judged_spam
 
 
+def _ai_sure() -> set[tuple[str, str]]:
+    """judged.ai_sure_spam() once per request."""
+    if "_ai_sure" not in g:
+        try:
+            with contextlib.closing(ui._connect()) as conn:
+                g._ai_sure = _judged().ai_sure_spam(conn, int(time.time()))
+        except Exception as ex:  # noqa: BLE001
+            log.warning("ai verdicts for Tjek disse failed: %s", type(ex).__name__)
+            g._ai_sure = set()
+    return g._ai_sure
+
+
 def review_hidden(selected: str) -> int:
     """How many mails review_items() left out as already judged."""
     review_items(selected)
@@ -1416,6 +1428,7 @@ def review_items(selected: str, *, limit: int | None = None) -> list[tuple[Any, 
     # spam is left out (judged.py) unless the page asks for all (?tjek=alle).
     show_all = request.args.get("tjek") == "alle"
     judged = set() if show_all else _judged_spam()
+    ai_sure = set() if show_all else _ai_sure()
     hidden = 0
     for r in rows:
         account = str(r["account"])
@@ -1430,10 +1443,14 @@ def review_items(selected: str, *, limit: int | None = None) -> list[tuple[Any, 
         reasons = review_reasons(r, acc, thr, known_by[account])
         if str(r["our_action"]) in PROVIDER_ACTIONS:
             reasons = provider_review_reasons(r, thr, reasons)
-        if reasons and judged and all(x.startswith(BORDERLINE_PREFIXES) for x in reasons) \
-                and _judged().already_judged(r["sender"], judged):
-            hidden += 1
-            continue
+        if reasons and not show_all and all(x.startswith(BORDERLINE_PREFIXES) for x in reasons):
+            # 2.19.2: also obvious spam - the AI is sure, or a first mail
+            # from an unknown sender without DMARC or with a spam sign.
+            names = {s["n"] for s in kit.parse_symbols(r["symbols"])}
+            if (judged and _judged().already_judged(r["sender"], judged)) or _judged().obvious_spam(
+                    names, (account, str(r["message_id"])) in ai_sure):
+                hidden += 1
+                continue
         if reasons:
             items.append((r, reasons))
     setattr(g, cache_key + ":hidden", hidden)
@@ -1503,14 +1520,15 @@ def _review_hidden_note(selected: str, here: str) -> str:
     sep = "&" if "?" in here else "?"
     if request.args.get("tjek") == "alle":
         base = re.sub(r"[?&]tjek=alle", "", here) or "/spam"
-        return (f'<p class="review-hidden faint small">Viser også mails fra afsendere, du allerede har kaldt spam. '
+        return (f'<p class="review-hidden faint small">Viser også de mails, der næsten sikkert er spam. '
                 f'<a href="{h(base)}#tjek">Skjul dem igen</a></p>')
     n = review_hidden(selected)
     if not n:
         return ""
     them = "den" if n == 1 else "dem"
-    return (f'<p class="review-hidden faint small">{_n(n, "mail", "mails")} fra afsendere, du allerede har kaldt spam, '
-            f'vises ikke – {them} ligger i Spamfilter-mappen. '
+    return (f'<p class="review-hidden faint small">{_n(n, "mail", "mails")} vises ikke, fordi {them} næsten sikkert er spam: '
+            'afsenderen er kaldt spam før, AI\'en er sikker, eller det er en ukendt afsender med faretegn. '
+            f'{"Den" if n == 1 else "De"} ligger i Spamfilter-mappen. '
             f'<a href="{h(here + sep + "tjek=alle")}#tjek">Vis {them} alligevel</a></p>')
 
 

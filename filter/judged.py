@@ -75,3 +75,39 @@ def judged_spam(conn: sqlite3.Connection, now: int, *, days: int = JUDGED_DAYS) 
 def already_judged(sender: Any, judged: Iterable[str]) -> bool:
     key = sender_key(sender)
     return key is not None and key in judged
+
+
+# ---------------------------------------------------------------------------
+# 2.19.2: obvious spam left out of 'Tjek disse'. Measured on 3 weeks of live
+# mail (69 borderline mails): these rules hid 49 of 59 spam and none of the
+# 10 mails people released - all 10 came from senders seen before.
+
+AI_SURE = 0.8
+FIRST_CONTACT_SIGNS = frozenset({
+    "TH_PAY_PHISH", "TH_SUBJECT_MIXED_SCRIPT", "TH_NEW_DOMAIN", "TH_FROM_ABUSED_TLD", "TH_LURE_SUBJECT",
+    "TH_LURE_SUBJECT_STRONG", "FUZZY_DENIED", "FUZZY_LOCAL_SPAM", "TH_FROM_NAME_HOMOGLYPH", "TH_BRAND_SPOOF",
+    "TH_SUBJECT_BRAND"})
+DMARC_PASS = frozenset({"DMARC_POLICY_ALLOW", "TH_PROVIDER_AUTH_PASS"})
+
+
+def ai_sure_spam(conn: sqlite3.Connection, now: int, *, days: int = 31) -> set[tuple[str, str]]:
+    """(account, message_id) the local AI called spam or phishing with
+    confidence >= AI_SURE. Never raises."""
+    try:
+        return {(str(a), str(m)) for a, m in conn.execute(
+            "SELECT account, message_id FROM ai_verdicts WHERE verdict IN ('spam', 'phishing') "
+            "AND confidence >= ? AND created_at >= ?", (AI_SURE, now - days * 86400))}
+    except (sqlite3.Error, TypeError, ValueError):
+        return set()
+
+
+def obvious_spam(names: Iterable[str], ai_sure: bool) -> str:
+    """Why a borderline-only mail is obvious spam ('' = offer it): the AI is
+    sure, or it is the first mail from an unknown sender without a DMARC
+    pass or with a spam sign."""
+    names = set(names or ())
+    if ai_sure:
+        return "ai"
+    if "TH_FIRST_CONTACT" in names and (not names & DMARC_PASS or names & FIRST_CONTACT_SIGNS):
+        return "first_contact"
+    return ""

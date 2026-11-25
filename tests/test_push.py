@@ -819,3 +819,9 @@ def test_review_skips_borderline_mail_from_a_sender_already_called_spam(penv):
     assert push.on_review(penv.conn, Acc(), now=NOW) == 0
     msg(penv, "<new2@x>", score=9.0, sender="Zoo <q@zoo-friends.example>", symbols=["TH_KNOWN_CONTACT"], ts=NOW + 10)
     assert push.on_review(penv.conn, Acc(), now=NOW + push.REVIEW_BATCH) == 1
+
+
+def test_review_skips_obvious_first_contact_spam(penv):
+    penv.sub("anna", prefs={"threat": False, "review": True, "problem": False})
+    msg(penv, "<fc@x>", score=9.0, sender="X <a@ukendt.example>", symbols=["TH_FIRST_CONTACT"])
+    assert push.on_review(penv.conn, Acc(), now=NOW) == 0
