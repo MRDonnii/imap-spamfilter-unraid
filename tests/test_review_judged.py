@@ -160,3 +160,14 @@ def test_review_hides_unknown_sender_without_dmarc_or_far_over_protected(tmp_pat
     assert "Ny butik med DMARC" in review and "Kendt domæne uden DMARC" in review and "Beskyttet lidt over" in review
     every = _review(c.get("/spam?tjek=alle").get_data(as_text=True))
     assert "Ukendt uden DMARC" in every and "Beskyttet langt over" in every
+
+
+def test_unknown_sender_with_dmarc_but_blocklisted_link_or_sure_bayes_is_obvious():
+    dmarc = {"DMARC_POLICY_ALLOW"}
+    assert judged.obvious_spam(dmarc, False, unknown=True) == ""                      # a new, real shop
+    assert judged.obvious_spam(dmarc | {"PHISHING", "RSPAMD_URIBL"}, False, unknown=True) == "first_contact"
+    assert judged.obvious_spam(dmarc, False, unknown=True, bayes=5.1) == "first_contact"
+    assert judged.obvious_spam(dmarc, False, unknown=True, bayes=3.9) == ""
+    assert judged.obvious_spam(dmarc | {"RSPAMD_URIBL"}, False, bayes=5.1) == ""        # sender seen before
+    assert judged.bayes_of([{"n": "X", "s": 1}, {"n": "BAYES_SPAM", "s": 5.1}]) == 5.1
+    assert judged.bayes_of([{"n": "BAYES_HAM", "s": -3}]) == 0.0 and judged.bayes_of(None) == 0.0

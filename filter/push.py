@@ -1146,6 +1146,14 @@ def on_threats(conn: sqlite3.Connection, account: str, *, now: int | None = None
         return 0
 
 
+def _symbol_list(raw: Any) -> list:
+    try:
+        data = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    except (TypeError, ValueError):
+        return []
+    return [i for i in (data if isinstance(data, list) else []) if isinstance(i, dict)]
+
+
 def _symbol_names(raw: Any) -> set[str]:
     try:
         data = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
@@ -1291,9 +1299,10 @@ def on_review(conn: sqlite3.Connection, acc: Any, *, now: int | None = None) -> 
                 if judged_keys and judged.already_judged(r["sender"], judged_keys):
                     continue
                 names = _symbol_names(r["symbols"])
-                if judged.obvious_spam(names, (account, str(r["message_id"])) in (ai_sure or set())):
+                bayes = judged.bayes_of(_symbol_list(r["symbols"]))
+                if judged.obvious_spam(names, (account, str(r["message_id"])) in (ai_sure or set()), bayes=bayes):
                     continue
-                if judged.obvious_spam(names, False, unknown=True) and judged.unknown_sender(
+                if judged.obvious_spam(names, False, unknown=True, bayes=bayes) and judged.unknown_sender(
                         conn, account, r["sender"], str(r["message_id"]), _row_ts(r)):
                     continue
             elif review_protected_only(r, user=user, threshold=thr, known=known):

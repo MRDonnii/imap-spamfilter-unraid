@@ -1459,11 +1459,12 @@ def review_items(selected: str, *, limit: int | None = None) -> list[tuple[Any, 
         if reasons and not show_all and all(x.startswith(BORDERLINE_PREFIXES) for x in reasons):
             # 2.19.2: also obvious spam - the AI is sure, or a first mail
             # from an unknown sender without DMARC or with a spam sign.
-            names = {s["n"] for s in kit.parse_symbols(r["symbols"])}
+            parsed = kit.parse_symbols(r["symbols"])
+            names = {s["n"] for s in parsed}
             jd = _judged()
             if (judged and jd.already_judged(r["sender"], judged)) or jd.obvious_spam(
-                    names, (account, str(r["message_id"])) in ai_sure) or (
-                    jd.obvious_spam(names, False, unknown=True)
+                    names, (account, str(r["message_id"])) in ai_sure, bayes=jd.bayes_of(parsed)) or (
+                    jd.obvious_spam(names, False, unknown=True, bayes=jd.bayes_of(parsed))
                     and _unknown_sender(account, r["sender"], str(r["message_id"]), r["ts"])):
                 hidden += 1
                 continue

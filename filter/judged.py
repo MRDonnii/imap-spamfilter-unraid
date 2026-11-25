@@ -101,16 +101,39 @@ def ai_sure_spam(conn: sqlite3.Connection, now: int, *, days: int = 31) -> set[t
         return set()
 
 
-def obvious_spam(names: Iterable[str], ai_sure: bool, *, unknown: bool = False) -> str:
+# 2.19.3: a link on a URL blocklist, rspamd's link-text phishing check, or
+# Bayes nearly sure (BAYES_SPAM >= 4 of 5.1, learnt from the people's own
+# verdicts) - also with a DMARC pass, since a spammer's own domain passes.
+URL_SIGNS = frozenset({
+    "PHISHING", "RSPAMD_URIBL", "URIBL_BLACK", "URIBL_RED", "DBL_SPAM", "DBL_PHISH", "DBL_ABUSE",
+    "DBL_ABUSE_PHISH", "DBL_ABUSE_REDIR", "DBL_ABUSE_MALWARE", "SURBL_MULTI", "ABUSE_SURBL", "PH_SURBL_MULTI",
+    "CRACKED_SURBL", "SEM_URIBL", "SEM_URIBL_FRESH15", "MSBL_EBL"})
+BAYES_SURE = 4.0
+
+
+def obvious_spam(names: Iterable[str], ai_sure: bool, *, unknown: bool = False, bayes: float = 0.0) -> str:
     """Why a borderline-only mail is obvious spam ('' = offer it): the AI is
     sure, or it is from an unknown sender (TH_FIRST_CONTACT, or `unknown`
-    from unknown_sender()) without a DMARC pass or with a spam sign."""
+    from unknown_sender()) without a DMARC pass, with a spam sign, a
+    blocklisted link or a Bayes score of BAYES_SURE or more."""
     names = set(names or ())
     if ai_sure:
         return "ai"
-    if ("TH_FIRST_CONTACT" in names or unknown) and (not names & DMARC_PASS or names & FIRST_CONTACT_SIGNS):
+    if ("TH_FIRST_CONTACT" in names or unknown) and (
+            not names & DMARC_PASS or names & FIRST_CONTACT_SIGNS or names & URL_SIGNS or bayes >= BAYES_SURE):
         return "first_contact"
     return ""
+
+
+def bayes_of(symbols: Iterable[Any]) -> float:
+    """BAYES_SPAM's score from parsed symbols ([{'n':..,'s':..}]), else 0."""
+    for sym in symbols or ():
+        try:
+            if sym.get("n") == "BAYES_SPAM":
+                return float(sym.get("s") or 0.0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return 0.0
 
 
 # ---------------------------------------------------------------------------

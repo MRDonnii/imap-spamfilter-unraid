@@ -1,5 +1,12 @@
 # Ændringslog
 
+## 2.19.4 — 2026-11-25 (beta)
+
+- **Tjek disse fanger også spam fra ukendte afsendere med gyldig DMARC:** En spammers eget domæne består ofte
+  DMARC. En mail fra en afsender, der aldrig har fået en mail igennem før, vises nu heller ikke, når den har et link
+  på en spamliste, rspamd's phishing-tegn (linktekst og adresse passer ikke sammen), eller når Bayes-filteret, der
+  har lært af jeres egne valg, er næsten sikker (mindst 4 af 5,1). Målt på 90 dage: 16 spammails færre, ingen gode.
+
 ## 2.19.3 — 2026-11-25 (beta)
 
 - **Færre spammails under Tjek disse:** Mærket "første mail fra en ukendt afsender" forsvandt, når en mail blev
