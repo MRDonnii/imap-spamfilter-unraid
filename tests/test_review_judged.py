@@ -40,7 +40,8 @@ def _env(tmp_path, monkeypatch):
     for i in range(3):
         insert_message(e.conn, "bynet", f"<zoo{i}@x>", sender=f"Zoo <x{i}@zoo-friends.example>",
                        subject=f"Glem toilettet {i}", **CAUGHT)
-    insert_message(e.conn, "bynet", "<other@x>", sender="Ny <n@nyafsender.example>", subject="Andet emne", **CAUGHT)
+    insert_message(e.conn, "bynet", "<other@x>", sender="Ny <n@nyafsender.example>", subject="Andet emne",
+                   symbols=[{"n": "DMARC_POLICY_ALLOW", "s": -0.5}], **CAUGHT)
     insert_message(e.conn, "bynet", "<prot@x>", sender="Zoo <x9@zoo-friends.example>", subject="Beskyttet",
                    symbols=[{"n": "TH_PROTECTED_RCPT", "s": 0.0, "o": ["info@firma.example"]}], **CAUGHT)
     e.conn.commit()
@@ -106,6 +107,7 @@ def test_review_hides_first_contact_and_ai_sure_spam(tmp_path, monkeypatch):
     insert_message(e.conn, "bynet", "<fcd@x>", sender="b@ny2.example", subject="Ny butik med DMARC",
                    symbols=[{"n": "TH_FIRST_CONTACT", "s": 1.0}, {"n": "DMARC_POLICY_ALLOW", "s": -0.5}], **CAUGHT)
     insert_message(e.conn, "bynet", "<ai@x>", sender="c@kendt.example", subject="AI er sikker", **CAUGHT)
+    insert_message(e.conn, "bynet", "<shop0@x>", sender="nyt@butik.example", our_action="kept", scanned_at=NOW - 86400)
     insert_message(e.conn, "bynet", "<shop@x>", sender="d@butik.example", subject="Black Friday fra butikken", **CAUGHT)
     e.conn.execute("CREATE TABLE IF NOT EXISTS ai_verdicts(account TEXT, message_id TEXT, verdict TEXT, "
                    "confidence REAL, created_at INTEGER)")
@@ -118,3 +120,43 @@ def test_review_hides_first_contact_and_ai_sure_spam(tmp_path, monkeypatch):
     assert "Ukendt uden DMARC" not in review and "AI er sikker" not in review
     assert "Ny butik med DMARC" in review and "Black Friday fra butikken" in review
     assert "2 mails vises ikke" in review
+
+
+# --- 2.19.3: unknown sender asked from the database; protected far over -----
+
+def test_unknown_sender_ignores_caught_mail_and_needs_history_before(tmp_path, monkeypatch):
+    e = make_admin_env(tmp_path, monkeypatch)
+    insert_message(e.conn, "bynet", "<c@x>", sender="a@ny.example", scanned_at=NOW - 7200, **CAUGHT)
+    insert_message(e.conn, "bynet", "<m@x>", sender="b@ny.example", scanned_at=NOW, **CAUGHT)
+    insert_message(e.conn, "bynet", "<k@x>", sender="nyhed@news.kendt.example", our_action="kept",
+                   scanned_at=NOW - 86400)
+    insert_message(e.conn, "molt", "<o@x>", sender="x@andet.example", our_action="kept", scanned_at=NOW - 86400)
+    e.conn.commit()
+    assert judged.unknown_sender(e.conn, "bynet", "b@ny.example", "<m@x>", NOW)         # earlier one was caught
+    assert not judged.unknown_sender(e.conn, "bynet", "c@kendt.example", "<n@x>", NOW)  # subdomain delivered before
+    assert judged.unknown_sender(e.conn, "bynet", "y@andet.example", "<n@x>", NOW)      # other mailbox only
+    assert judged.unknown_sender(e.conn, "bynet", "y@kendt.example", "<n@x>", NOW - 2 * 86400)  # not known yet then
+    assert not judged.unknown_sender(e.conn, "bynet", "nobody", "<n@x>", NOW)
+    assert not judged.unknown_sender(e.conn, "bynet", "b@ny.example", "<m@x>", None)
+
+
+def test_review_hides_unknown_sender_without_dmarc_or_far_over_protected(tmp_path, monkeypatch):
+    e = make_admin_env(tmp_path, monkeypatch)
+    insert_message(e.conn, "bynet", "<u@x>", sender="a@ukendt.example", subject="Ukendt uden DMARC", **CAUGHT)
+    insert_message(e.conn, "bynet", "<d@x>", sender="a@butik.example", subject="Ny butik med DMARC",
+                   symbols=[{"n": "DMARC_POLICY_ALLOW", "s": -0.5}], **CAUGHT)
+    insert_message(e.conn, "bynet", "<k0@x>", sender="a@kendt.example", our_action="kept", scanned_at=NOW - 86400)
+    insert_message(e.conn, "bynet", "<k@x>", sender="b@kendt.example", subject="Kendt domæne uden DMARC", **CAUGHT)
+    prot = [{"n": "TH_PROTECTED_RCPT", "s": 0.0, "o": ["info@firma.example"]}]
+    insert_message(e.conn, "bynet", "<p1@x>", sender="a@p1.example", subject="Beskyttet langt over",
+                   symbols=prot, **{**CAUGHT, "our_score": 33.0})
+    insert_message(e.conn, "bynet", "<p2@x>", sender="a@p2.example", subject="Beskyttet lidt over",
+                   symbols=prot, **{**CAUGHT, "our_score": 17.0})
+    e.conn.commit()
+    c = e.app.test_client()
+    assert login(c).status_code == 302
+    review = _review(c.get("/spam").get_data(as_text=True))
+    assert "Ukendt uden DMARC" not in review and "Beskyttet langt over" not in review
+    assert "Ny butik med DMARC" in review and "Kendt domæne uden DMARC" in review and "Beskyttet lidt over" in review
+    every = _review(c.get("/spam?tjek=alle").get_data(as_text=True))
+    assert "Ukendt uden DMARC" in every and "Beskyttet langt over" in every

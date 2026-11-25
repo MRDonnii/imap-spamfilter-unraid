@@ -1,5 +1,16 @@
 # Ændringslog
 
+## 2.19.3 — 2026-11-25 (beta)
+
+- **Færre spammails under Tjek disse:** Mærket "første mail fra en ukendt afsender" forsvandt, når en mail blev
+  scannet igen, så to ud af tre fangede mails manglede det, og tydelig spam blev stadig vist. Nu spørger listen
+  selv databasen: er der aldrig kommet en mail fra afsenderen igennem til indbakken før, og består den ikke
+  DMARC eller har et faretegn, vises den ikke. Målt på 90 dages rigtig post: 142 spammails færre på listen, og
+  ingen af de 18 mails, som folk frigav, ville være skjult.
+- **Beskyttede adresser:** En mail, der kun står på listen, fordi den gik til en beskyttet adresse, vises ikke, når
+  scoren er mindst 10 over grænsen (fx score 33 med Spamhaus, kendt spamindhold og SPF-fejl). Telefonbeskeden følger
+  de samme regler, og **Vis dem alligevel** viser alt.
+
 ## 2.19.2 — 2026-11-25 (beta)
 
 - **Tjek disse viser kun det, der kan være en god mail:** En grænsemail vises ikke længere, når den næsten sikkert

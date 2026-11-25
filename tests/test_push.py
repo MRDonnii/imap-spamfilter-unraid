@@ -641,7 +641,7 @@ def test_review_counts_only_maybe_legit_mail_and_batches_per_30_min(penv):
     inge = penv.sub("inge", prefs={"threat": True, "review": True, "problem": False})
     anna = penv.sub("anna", prefs={"threat": True, "review": True, "problem": False})
     acc = Acc()
-    msg(penv, "<near@x>", score=9.0)                                       # just over 8.0
+    msg(penv, "<near@x>", score=9.0, symbols=["DMARC_POLICY_ALLOW"])                                       # just over 8.0
     msg(penv, "<contact@x>", score=30.0, symbols=["TH_KNOWN_CONTACT"])
     msg(penv, "<own@x>", score=30.0, sender="Kollega <k@example.com>")
     msg(penv, "<spam@x>", score=30.0)                                      # clear spam: no
@@ -654,7 +654,7 @@ def test_review_counts_only_maybe_legit_mail_and_batches_per_30_min(penv):
                                         "url": "/spam?account=bynet", "tag": "sf-review"}]
     assert penv.svc.payloads(inge) == []
     # Inside the 30 min batch: held back, and the engine is told when to wake.
-    msg(penv, "<near2@x>", score=8.5, ts=NOW + 60)
+    msg(penv, "<near2@x>", score=8.5, ts=NOW + 60, symbols=["DMARC_POLICY_ALLOW"])
     assert push.on_review(penv.conn, acc, now=NOW + 60) == 0
     assert push.review_due_in(penv.conn, acc, now=NOW + 60) == pytest.approx(push.REVIEW_BATCH - 60)
     assert push.on_review(penv.conn, acc, now=NOW + push.REVIEW_BATCH) == 1
@@ -675,11 +675,11 @@ def test_review_known_sender_counts(penv):
 
 def test_review_without_subscribers_never_floods_later(penv):
     acc = Acc()
-    msg(penv, "<a@x>", score=9.0, ts=NOW - 600)
+    msg(penv, "<a@x>", score=9.0, ts=NOW - 600, symbols=["DMARC_POLICY_ALLOW"])
     assert push.on_review(penv.conn, acc, now=NOW) == 0
     anna = penv.sub("anna", prefs={"threat": True, "review": True, "problem": False})
     assert push.on_review(penv.conn, acc, now=NOW + 30) == 0               # older than the floor
-    msg(penv, "<b@x>", score=9.0, ts=NOW + 40)
+    msg(penv, "<b@x>", score=9.0, ts=NOW + 40, symbols=["DMARC_POLICY_ALLOW"])
     assert push.on_review(penv.conn, acc, now=NOW + 50) == 1
     penv.run(NOW + 50)
     assert penv.svc.payloads(anna)[0]["body"] == "En ny mail i BYnet er måske ikke spam."
@@ -775,6 +775,9 @@ def test_engine_loop_pushes_a_moved_threat_and_review_mail(tmp_path, monkeypatch
                               prefs={"threat": True, "review": True, "problem": False})["ok"]
         svc.add(dev)
         devs[user] = dev
+    h.deliver("seen@x", score=1.0)           # 2.19.3: the sender reached the inbox before
+    h.loop()
+    h.advance(60)
     threat_mail(h, "ph1@x", PHISH)
     h.deliver("near@x", score=11.0)          # caught, just over 10: "Tjek disse"
     h.loop()
@@ -825,3 +828,16 @@ def test_review_skips_obvious_first_contact_spam(penv):
     penv.sub("anna", prefs={"threat": False, "review": True, "problem": False})
     msg(penv, "<fc@x>", score=9.0, sender="X <a@ukendt.example>", symbols=["TH_FIRST_CONTACT"])
     assert push.on_review(penv.conn, Acc(), now=NOW) == 0
+
+
+def test_review_skips_unknown_sender_without_dmarc_and_protected_far_over(penv):
+    """2.19.3: the same rules as 'Tjek disse' (judged.unknown_sender /
+    protected_hidden); a sender that reached the inbox before still counts."""
+    penv.sub("anna", prefs={"threat": False, "review": True, "problem": False})
+    msg(penv, "<u@x>", score=9.0, sender="X <a@ukendt.example>")
+    msg(penv, "<p@x>", score=33.0, sender="X <a@p.example>", symbols=["TH_PROTECTED_RCPT"])
+    assert push.on_review(penv.conn, Acc(), now=NOW) == 0
+    msg(penv, "<k0@x>", score=1.0, action="kept", folder="INBOX", sender="K <a@kendt.example>", ts=NOW - 86400)
+    msg(penv, "<k@x>", score=9.0, sender="K <b@kendt.example>", ts=NOW + 10)
+    msg(penv, "<p2@x>", score=17.0, sender="X <a@p2.example>", symbols=["TH_PROTECTED_RCPT"], ts=NOW + 10)
+    assert push.on_review(penv.conn, Acc(), now=NOW + push.REVIEW_BATCH) == 1

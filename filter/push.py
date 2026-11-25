@@ -1176,6 +1176,16 @@ def review_borderline_only(row: Any, *, user: str, threshold: float, known: int)
             and not review_qualifies(row, user=user, threshold=float("-inf"), known=known))
 
 
+def review_protected_only(row: Any, *, user: str, threshold: float, known: int) -> bool:
+    """review_qualifies() only because it went to a protected address (2.19.3)."""
+    syms = _symbol_names(row["symbols"])
+    if "TH_PROTECTED_RCPT" not in syms:
+        return False
+    plain = dict(row)
+    plain["symbols"] = json.dumps([{"n": n} for n in sorted(syms - {"TH_PROTECTED_RCPT"})])
+    return not review_qualifies(plain, user=user, threshold=threshold, known=known)
+
+
 def review_qualifies(row: Any, *, user: str, threshold: float, known: int) -> bool:
     """The same test as ui_mail.review_reasons() (non-empty): a mail the
     filter caught that may be legitimate. tests/test_push.py keeps the two
@@ -1195,6 +1205,16 @@ def review_qualifies(row: Any, *, user: str, threshold: float, known: int) -> bo
     except (TypeError, ValueError):
         score = None
     return score is not None and score < float(threshold) + REVIEW_MARGIN
+
+
+def _row_ts(row: Any) -> int | None:
+    for col in ("scanned_at", "received_at", "first_seen"):
+        try:
+            if row[col] is not None:
+                return int(row[col])
+        except (IndexError, KeyError, TypeError, ValueError):
+            continue
+    return None
 
 
 def _review_floor_key(account: str) -> str:
@@ -1270,8 +1290,16 @@ def on_review(conn: sqlite3.Connection, acc: Any, *, now: int | None = None) -> 
                     ai_sure = judged.ai_sure_spam(conn, t)
                 if judged_keys and judged.already_judged(r["sender"], judged_keys):
                     continue
-                if judged.obvious_spam(_symbol_names(r["symbols"]),
-                                       (account, str(r["message_id"])) in (ai_sure or set())):
+                names = _symbol_names(r["symbols"])
+                if judged.obvious_spam(names, (account, str(r["message_id"])) in (ai_sure or set())):
+                    continue
+                if judged.obvious_spam(names, False, unknown=True) and judged.unknown_sender(
+                        conn, account, r["sender"], str(r["message_id"]), _row_ts(r)):
+                    continue
+            elif review_protected_only(r, user=user, threshold=thr, known=known):
+                import judged  # noqa: PLC0415
+
+                if judged.protected_hidden(_symbol_names(r["symbols"]), r["our_score"], thr):
                     continue
             n += 1
         with _tx(conn):

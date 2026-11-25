@@ -1393,6 +1393,19 @@ def _ai_sure() -> set[tuple[str, str]]:
     return g._ai_sure
 
 
+PROTECTED_PREFIX = "Sendt til en beskyttet adresse"
+
+
+def _unknown_sender(account: str, sender: Any, message_id: str, ts: Any) -> bool:
+    """judged.unknown_sender() (False if the database cannot be read)."""
+    try:
+        with contextlib.closing(ui._connect()) as conn:
+            return _judged().unknown_sender(conn, account, sender, message_id, ts)
+    except Exception as ex:  # noqa: BLE001 - never break Fanget spam
+        log.warning("unknown sender check failed: %s", type(ex).__name__)
+        return False
+
+
 def review_hidden(selected: str) -> int:
     """How many mails review_items() left out as already judged."""
     review_items(selected)
@@ -1447,8 +1460,16 @@ def review_items(selected: str, *, limit: int | None = None) -> list[tuple[Any, 
             # 2.19.2: also obvious spam - the AI is sure, or a first mail
             # from an unknown sender without DMARC or with a spam sign.
             names = {s["n"] for s in kit.parse_symbols(r["symbols"])}
-            if (judged and _judged().already_judged(r["sender"], judged)) or _judged().obvious_spam(
-                    names, (account, str(r["message_id"])) in ai_sure):
+            jd = _judged()
+            if (judged and jd.already_judged(r["sender"], judged)) or jd.obvious_spam(
+                    names, (account, str(r["message_id"])) in ai_sure) or (
+                    jd.obvious_spam(names, False, unknown=True)
+                    and _unknown_sender(account, r["sender"], str(r["message_id"]), r["ts"])):
+                hidden += 1
+                continue
+        elif reasons and not show_all and all(x.startswith(PROTECTED_PREFIX) for x in reasons):
+            # 2.19.3: only 'sent to a protected address', far over the line.
+            if _judged().protected_hidden({s["n"] for s in kit.parse_symbols(r["symbols"])}, r["our_score"], thr):
                 hidden += 1
                 continue
         if reasons:
