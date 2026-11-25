@@ -22,6 +22,7 @@ from test_ui_core import INLINE_PATTERNS
 
 import dashboard
 import ui_kit as kit
+import ui_mail
 
 
 def audit(env) -> list[dict]:
@@ -604,8 +605,9 @@ def test_auto_allow_events_have_danish_labels():
     import ui_admin
     import ui_mail
 
-    for ev in ("rule_auto_allow", "rule_auto_allow_removed", "rule_auto_allow_skipped"):
+    for ev in ("rule_auto_allow", "rule_auto_allow_removed", "rule_auto_allow_skipped", "junk_auto_block_removed"):
         assert ev in ui_admin.EVENT_LABELS and ev in ui_mail.EVENT_INFO
+        assert len(ui_admin.EVENT_LABELS[ev]) == 2 and len(ui_mail.EVENT_INFO[ev]) == 3
         assert "_" not in ui_admin.EVENT_LABELS[ev][0] and "_" not in ui_mail.EVENT_INFO[ev][0]
 
 
@@ -624,3 +626,82 @@ def test_single_mailbox_undo_page_wording(env):
     assert "1. Vælg periode" in html and "Vælg postkasse og periode" not in html
     assert "følsomheden" not in html
     assert "følsomheden" in body(client_for(env, "admin").get("/undo"))
+
+
+def test_bruger_explanation_does_not_rewrite_history_using_a_new_block_rule():
+    row = dict(our_action='moved_to_junk', rule_hit=None, symbols='[]')
+    reasons = ui_mail.why_reasons(row, dict(id=42, kind='block'))
+    assert not any('blokeret' in r.lower() for r in reasons)
+
+
+def test_bruger_explanation_keeps_a_recorded_block_after_the_rule_is_removed():
+    row = dict(our_action='moved_to_junk', rule_hit='block:42', symbols='[]')
+    reasons = ui_mail.why_reasons(row)
+    assert any('blokeret' in r.lower() for r in reasons)
+
+
+def test_bruger_explanation_never_claims_an_unrecorded_score_threshold():
+    reasons = ui_mail.why_reasons(dict(our_action='none', rule_hit=None, symbols='[]'))
+    assert not any('over grænsen' in r for r in reasons)
+    assert any('ikke markeret' in r for r in reasons)
+
+
+def test_drift_exposes_fresh_antivirus_and_waiting_metadata_only_to_admin(env, monkeypatch):
+    import aio_health
+    import ai_verdict
+    now = int(time.time())
+    monkeypatch.setattr(aio_health, 'read_status', lambda: {'ts': now,
+        'parts': {'clamav': {'state': 'stale', 'db_age_s': 4*86400}}})
+    monkeypatch.setattr(ai_verdict, 'queue_status', lambda **kw: dict(count=2, oldest_age_s=180))
+    html = body(client_for(env, 'admin').get('/system'))
+    assert 'Antivirus og ventende arbejde' in html
+    assert 'Virusdefinitionerne er for gamle' in html
+    assert '2 ventende' in html
+    assert 'Køtal er ikke fejlmeldinger' in html
+    csp_clean(html, '/system')
+    denied = client_for(env, 'anna').get('/system')
+    assert denied.status_code == 403
+    assert 'Virusdefinitionerne er for gamle' not in body(denied)
+
+
+def test_drift_never_presents_stale_antivirus_health_as_working(env, monkeypatch):
+    import aio_health
+    monkeypatch.setattr(aio_health, 'read_status', lambda: {'ts': int(time.time())-601,
+        'parts': {'clamav': {'state': 'ok', 'db_age_s': 100}}})
+    html = body(client_for(env, 'admin').get('/system'))
+    assert 'Ukendt – ingen frisk måling' in html
+
+
+def test_account_spam_automation_has_scoped_admin_switch_and_preserves_other_settings(env):
+    admin = client_for(env, 'admin')
+    html = body(admin.get('/accounts/bynet'))
+    assert 'Husk gentagen spam automatisk' in html
+    assert 'action="/accounts/bynet/auto-block"' in html
+    assert post(client_for(env, 'anna'), '/accounts/bynet/auto-block', {}).status_code == 403
+    before = dict(env.entry('bynet'))
+    response = post(admin, '/accounts/bynet/auto-block', {})
+    assert response.status_code == 200
+    after = dict(env.entry('bynet'))
+    assert after.pop('auto_block_repeated_spam') is False
+    assert after == before
+    assert any(a['action'] == 'account_auto_block' for a in audit(env))
+    assert post(admin, '/accounts/bynet/auto-block', {'auto_block_repeated_spam':'1'}).status_code == 200
+    assert env.entry('bynet')['auto_block_repeated_spam'] is True
+
+
+def test_manual_correction_followup_is_admin_only_and_selected_account_scoped(env, monkeypatch):
+    import correctionfollowup
+    import decisiontrace
+    from fakes_ui import insert_message
+    env.conn.executescript(decisiontrace.SCHEMA)
+    monkeypatch.setattr(dashboard.engine, 'from_authenticated', lambda *args: False, raising=False)
+    now=int(time.time())
+    for account in ('bynet','molt'):
+        insert_message(env.conn,account,'followup-'+account,user_verdict='spam',verdict_at=now,verdict_by='admin')
+    env.conn.commit()
+    admin=client_for(env,'admin')
+    text=body(admin.get('/spam?account=bynet'))
+    assert 'Tjek disse: manuelle spamrettelser' in text
+    assert '1 seneste eksplicitte spamrettelser' in text
+    assert 'Tjek disse: manuelle spamrettelser' not in body(client_for(env,'anna').get('/spam'))
+    assert 'Tjek disse: manuelle spamrettelser' not in body(admin.get('/spam?account=sofie'))

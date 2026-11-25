@@ -82,6 +82,22 @@ def events(h, name):
                                                 "ORDER BY id", (name,))]
 
 
+def test_unwanted_established_newsletter_is_not_a_campaign_for_other_mailboxes(eng, monkeypatch):
+    p = Pair(eng, monkeypatch)
+    p.mail(p.a, "local-newsletter@x", extra_headers="List-Unsubscribe: <https://news.example/unsubscribe>")
+    p.a.db.update_message("local-newsletter@x", symbols=json.dumps([
+        {"n": "TH_NEWSLETTER", "s": -1.5}, {"n": "TH_ESTABLISHED", "s": -2.0}]))
+    p.mail(p.b, "other-copy@x")
+    p.junk_in_a("local-newsletter@x")
+    assert not queue(p.b)
+    p.pass_(p.b)
+    assert p.b.row("other-copy@x")["our_action"] == "none"
+    p.advance(p.a.acc.learn_grace_seconds + 60)
+    p.a.eng.process_pending_learns(p.a.client, p.a.db, LOG, p.a.acc, p.a.acc.folder_map)
+    assert not p.a.rspamd.learn_calls
+    assert p.a.row("local-newsletter@x")["user_verdict"] == "spam"
+
+
 # ---------------------------------------------------------------- the flow
 
 
@@ -555,3 +571,58 @@ def test_brand_domains_mirror_the_rspamd_map():
     import siteconfig
     assert campaigns.BRAND_DOMAINS == doms | set(siteconfig.get_list("mail_domains"))
     assert not doms & set(siteconfig.get_list("mail_domains"))     # never in the repository map
+
+
+def test_campaign_phases_replay_without_subject_sender_or_body(eng, monkeypatch):
+    import decisiontrace
+    p = Pair(eng, monkeypatch)
+    p.mail(p.a, 'trace-source@x')
+    p.mail(p.b, 'trace-target@x', body='PRIVATE CAMPAIGN BODY')
+    p.junk_in_a('trace-source@x')
+    p.pass_(p.b)
+    rows = p.b.db.conn.execute("SELECT stage,snapshot FROM decision_traces WHERE account='b' "
+                              "AND stage LIKE 'campaign_%'").fetchall()
+    assert {r[0] for r in rows} == {'campaign_context', 'campaign_score', 'campaign_live'}
+    for stage, snapshot in rows:
+        assert all(secret not in snapshot for secret in ('PRIVATE CAMPAIGN BODY', SPAMMER, SUBJ))
+        assert decisiontrace.replay(snapshot) == json.loads(snapshot)['result']
+
+
+@pytest.mark.parametrize('mode', ['move', 'flag'])
+@pytest.mark.parametrize('change', ['source_rescued', 'target_rescued', 'allow_rule', 'raised_threshold', 'safe_mode', 'shadow_mode'])
+def test_user_safety_changes_during_live_fetch_win_over_stale_campaign(eng, monkeypatch, mode, change):
+    p = Pair(eng, monkeypatch, mode_b=mode)
+    p.mail(p.a, 'race-source@x')
+    p.mail(p.b, 'race-target@x')
+    p.junk_in_a('race-source@x')
+    fetch = p.b.client.fetch
+    changed = []
+
+    def live_fetch(*args, **kwargs):
+        response = fetch(*args, **kwargs)
+        if not changed:
+            changed.append(True)
+            if change == 'source_rescued':
+                _set(p.a, 'race-source@x', user_verdict='ham')
+                with p.a.db.tx():
+                    campaigns.cancel_for_source(p.a.db.conn, 'a', 'race-source@x', now=int(p.a.t))
+            elif change == 'target_rescued':
+                _set(p.b, 'race-target@x', user_verdict='ham', our_action='manual_release')
+            elif change == 'allow_rule':
+                eng.add_sender_rule(p.b.db.conn, 'b', SPAMMER, 'allow', actor='sofie')
+            elif change == 'shadow_mode':
+                p.b.acc.mode = 'shadow'
+            elif change == 'safe_mode':
+                p.b.db.enter_safe_mode('all', 'stop during fetch')
+            else:
+                p.b.acc.threshold = 12
+        return response
+
+    monkeypatch.setattr(p.b.client, 'fetch', live_fetch)
+    p.pass_(p.b)
+    assert changed, 'test must intervene during the real campaign FETCH'
+    assert p.b.row('race-target@x')['our_action'] in ('none', 'manual_release')
+    assert not p.b.db.conn.execute("SELECT 1 FROM pending_move WHERE account='b'").fetchone()
+    assert not events(p.b, 'campaign_move')
+    assert not any('Junk' in str(m.flags) for m in p.b.client.folders['INBOX'].msgs.values())
+    assert p.b.client.msgids('INBOX') == ['race-target@x']

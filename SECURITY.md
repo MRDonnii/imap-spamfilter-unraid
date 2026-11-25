@@ -228,3 +228,33 @@ Exitkoder: 0 = ok, 1 = fejl eller afvist, 2 = forkert brug.
 - **Daglig opsummering** er en Unraid-notifikation til administratoren. Fra 2.3 kan den også sendes som mail.
 - **Kendte kontakter (2.3):** Fra Sendt læses kun modtageradresser, Message-ID og referencer, aldrig indholdet. Adresser, Message-ID'er og domæner gemmes som HMAC-SHA256 med `state/contacts.key` og med domæneadskillelse, så databasen ikke kan bruges som adressebog eller sammenlignes med en anden installation. Til visning gemmes kun en maske ("a…@kunde.dk"). Listen viser kun en fuld adresse, når personen også selv har skrevet til postkassen. Hændelser, revisionslog, symboler og logs indeholder kun masker.
 - **Mail fra filteret (2.3):** Afsendes gennem den konfigurerede SMTP-server med TLS (STARTTLS eller SSL, `CERT_REQUIRED` og kontrol af værtsnavn), aldrig login uden TLS, og aldrig som åbent relæ. Adresser og emner valideres (CR/LF og styretegn afvises). Mails er mærket `Auto-Submitted: auto-generated` og `X-TH-Spamfilter: notify`, og filteret scanner, flytter og lærer aldrig af sine egne notifikationer. Højst 60 mails i timen (koder og alarmer må bruge hele budgettet, andre slags stopper ved 40) og 20 pr. modtager. Udbakken (`mail_outbox`) gemmer indholdet, til mailen er sendt eller opgivet, og metadata i 30 dage. Revisionsloggen (`mail_sent`, `mail_failed`, `smtp_test`) indeholder kun maskerede adresser og aldrig indhold eller koder.
+
+
+## Mailidentitet og opgradering fra 2.14 (2.15)
+
+Message-ID kommer fra afsenderen og er ikke en tillidsgrænse. Tabellen `mail_identity` knytter postkasse, intern nøgle, oprindeligt ID og SHA-256 af mailens stabile headere og MIME-indhold sammen. Leveringsheadere (fx Received, DKIM-signatur og Authentication-Results) og CRLF/LF normaliseres; afsender, emne, applikationsmarkører og body er bundet. Ved fejlformede headere hashes hele den normaliserede rå mail konservativt, så bodytekst ikke forveksles med leveringsheadere. Mailen ændres ikke. Manglende, usikre, reserverede eller genbrugte ID'er får en intern `sf-local:`-nøgle. Opslag og mailhandlinger kontrollerer indholdet før brug af denne binding.
+
+Gamle rækker uden fingerprint bevares. En ny indbakkelevering må ikke arve deres frigivelse ud fra header-ID alene; den får en særskilt identitet og normal kontrol. En gammel frigivet mail kan derfor skulle frigives igen efter genlevering. Egne kvitteringer og SMTP-notifikationer undtages kun med en binding til det faktisk genererede indhold.
+
+Skemaudvidelserne er additive og idempotente. Ældre kode ignorerer dem, men en rollback genindfører også den gamle ID-baserede tillid og manglende scanning af mails uden ID. En teknisk mulig rollback er derfor ikke en bevaret sikkerhedsrettelse. Tag backup før opdatering; gendan matchende kildekode, state og Redis ved en fuld rollback, jf. BACKUP.md.
+
+Scanning er IMAP-efterbehandling, og læste/store mails samt antivirusnedetid begrænser dækningen. Eksplicit administratorfrigivelse og de dokumenterede, bekræftede afsenderundtagelser kan ændre beslutningen. Det er ikke en garanti mod alle skadelige mails.
+
+
+**Gamle opslag og trusler:** Kendte 2.14-rækker uden indholdsbinding bruges ikke til headerbaseret måludvælgelse i kontoforbindelser. Det stopper også gamle ventende lærejob i at træne på en anden mail med genbrugt ID. Brug **Find en mail** for at binde en konkret kopi før en manuel handling. En gammel kendt trussel følger som konservativ adgangsbegrænsning med til en ny, endnu ikke scannet alias-identitet: kun administrator med bekræftelse kan frigive den, og den læres ikke som legitim. Når den oprindelige mails indhold er kendt via fingerprint, kan en anden mails egen scanning give en selvstændig klassifikation. Uden den oprindelige binding bevares det gamle administratorkrav konservativt; en ny score alene kan ikke modbevise den gamle virusmarkering. En bekræftet frigivelse bevarer trusselsmærket, så senere flytning i mailprogrammet ikke lærer mailen som legitim. Gamle afbrudte flytninger uden indholdsbinding/journalbevis skal kontrolleres manuelt; der slettes ingen kildekopi alene ud fra samme header-ID. Ventende flytninger med deres oprindelige UID/UIDVALIDITY-bevis bevarer den eksisterende køpolitik.
+
+## Lokale evalueringsdata (2.16)
+
+Holdout-registret indeholder indholdsfingerprints og neutrale prøve-ID'er.
+Beslutningsspor indeholder komplette politiksymboler, relevante brugerafgørelser,
+valgte afsenderregler og autentificeringsdomæner, men ingen body eller emne.
+Sporene er kontobundne driftsdata og slettes med de forældreløse mailposter.
+Hashes er ikke anonymisering; beskyt databasen og lokale eksport-/mailfiler.
+
+Nye AI-metadata identificerer systemprompt/faktaudtræk og den anvendte request-
+konfiguration uden mailtekst eller lokal URL. De beviser hverken identiske
+modelvægte, korrekt AI-confidence eller modstand mod alle prompt-injektioner.
+Gamle AI-poster får ingen efterkonstrueret version. Reservationer hindrer
+matchende fremtidig Bayes/fuzzy-læring gennem den nye appkode, men tilbagefører
+ikke historisk læring og begrænser ikke ejerens øvrige mailhandlinger.
+Ældre kode håndhæver ikke reservationerne. Se CONFIGURATION.md for omfanget.

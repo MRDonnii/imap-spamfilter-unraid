@@ -140,6 +140,78 @@ def enroll_2fa(name: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_quality_compare_is_read_only_and_reports_sample_regression(env, capsys, monkeypatch):
+    baseline = env.state / 'baseline.jsonl'
+    candidate = env.state / 'candidate.jsonl'
+    rows = [dict(account='sample-a', id='private-id', split='holdout', label='ham',
+                 prediction='ham', score=0, threshold=8),
+            dict(account='sample-a', id='sample-spam', split='holdout', label='spam',
+                 prediction='spam', score=10, threshold=8)]
+    baseline.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+    candidate.write_text(''.join(json.dumps(dict(r, prediction='spam')) + '\n' for r in rows))
+    before_db = env.db.read_bytes()
+    original = baseline.read_bytes(), candidate.read_bytes()
+    monkeypatch.setattr(engine, 'connect', lambda *a, **kw: pytest.fail('evaluation must not contact IMAP'))
+    code, out, err = run(capsys, monkeypatch, 'quality-compare', str(baseline), str(candidate),
+                         '--min-per-class', '1', '--false-positive-cost', '15')
+    assert code == 0 and not err
+    result = json.loads(out)
+    assert result['status'] == 'regression_in_sample'
+    assert result['accounts'][0]['cost_delta'] == 15
+    assert 'private-id' not in out
+    assert env.db.read_bytes() == before_db
+    assert (baseline.read_bytes(), candidate.read_bytes()) == original
+    assert audit_records(env) == []
+
+
+def test_quality_compare_rejects_changed_labels(env, capsys, monkeypatch):
+    a, b = env.state / 'a.jsonl', env.state / 'b.jsonl'
+    sample = dict(account='a', id='private-id', split='holdout', label='ham', score=0, threshold=8)
+    a.write_text(json.dumps(sample) + '\n')
+    b.write_text(json.dumps(dict(sample, label='spam')) + '\n')
+    code, out, err = run(capsys, monkeypatch, 'quality-compare', str(a), str(b))
+    assert code != 0 and not out and 'label' in err
+    assert 'private-id' not in err
+
+
+def test_quality_reserve_keeps_mail_local_and_writes_only_a_content_reservation(env, capsys, monkeypatch):
+    import holdout
+    raw = b'From: sender@sample.example\r\nSubject: PRIVATE SUBJECT\r\n\r\nPRIVATE BODY'
+    mail = env.state / 'sample.eml'
+    mail.write_bytes(raw)
+    monkeypatch.setattr(engine, 'connect', lambda *a, **kw: pytest.fail('reservation must not contact IMAP'))
+    code, out, err = run(capsys, monkeypatch, 'quality-reserve', str(mail), '--sample-id', 'sample-001')
+    assert code == 0 and not err
+    result = json.loads(out)
+    assert result['reserved'] and result['scope'] == 'matching_content_all_accounts'
+    assert 'PRIVATE' not in out
+    assert mail.read_bytes() == raw
+    with sqlite3.connect(env.db) as conn:
+        assert holdout.reserved(conn, raw)
+    assert last_audit(env)['action'] == 'quality_reserve'
+
+
+def test_policy_preview_is_account_scoped_read_only_and_never_contacts_imap(env, capsys, monkeypatch):
+    import decisiontrace
+    import decisionpolicy
+    decision = decisionpolicy.decide(None, None, 10, frozenset(), threshold=8)
+    decision.policy_input = decisiontrace.inputs(None, None, 10, frozenset(), threshold=8)
+    with sqlite3.connect(env.db) as conn:
+        decisiontrace.record(conn, 'bynet', 'private-id', 'scan', decision, 1)
+        decisiontrace.record(conn, 'other-account', 'other-id', 'scan', decision, 1)
+    original = env.db.read_bytes()
+    monkeypatch.setattr(engine, 'connect', lambda *a, **kw: pytest.fail('preview must not contact IMAP'))
+    code, out, err = run(capsys, monkeypatch, 'policy-preview', 'bynet', '--threshold', '12')
+    assert code == 0 and not err
+    result = json.loads(out)
+    assert result['sampled'] == result['changed'] == 1
+    assert not result['items'][0]['candidate_spam']
+    assert 'private-id' not in out and 'other-account' not in out
+    assert not result['automatic_activation']
+    assert env.db.read_bytes() == original
+    assert audit_records(env) == []
+
+
 def test_status(env, capsys, monkeypatch):
     (env.state / "heartbeat").write_text(f"{int(__import__('time').time()) - 5} boot\n")
     dashboard.settings_set("external_url", "https://spam.example.dk")
@@ -1021,3 +1093,57 @@ def test_help_lists_the_bayes_commands():
     for cmd in ("bayes-rebuild", "bayes-restore", "bayes-status"):
         assert cmd in help_text
     assert "sfctl bayes-rebuild --dry-run" in sfctl.EPILOG
+
+
+def test_policy_trial_start_status_stop_never_changes_account_config(env, capsys, monkeypatch):
+    original = env.config.read_bytes()
+    monkeypatch.setattr(engine, 'connect', lambda *a, **kw: pytest.fail('trial setup must not contact IMAP'))
+    code, out, err = run(capsys, monkeypatch, 'policy-trial', 'bynet', '--threshold', '5')
+    assert code == 0 and not err
+    result = json.loads(out)
+    assert result['trial']['status'] == 'shadow' and result['trial']['candidate_threshold'] == 5
+    assert not result['automatic_activation']
+    assert env.config.read_bytes() == original
+    assert last_audit(env)['action'] == 'policy_trial_start'
+    audits = len(audit_records(env))
+    code, out, err = run(capsys, monkeypatch, 'policy-trial', 'bynet')
+    assert code == 0 and json.loads(out)['trial']['observed'] == 0
+    assert len(audit_records(env)) == audits
+    code, out, err = run(capsys, monkeypatch, 'policy-trial', 'bynet', '--stop')
+    assert code == 0 and json.loads(out)['trial']['status'] == 'stopped'
+    assert env.config.read_bytes() == original
+    assert last_audit(env)['action'] == 'policy_trial_stop'
+
+
+def test_policy_trial_rejects_unknown_account_and_nonfinite_threshold(env, capsys, monkeypatch):
+    for account, threshold in [('other-account', '5'), ('bynet', 'nan')]:
+        code, out, err = run(capsys, monkeypatch, 'policy-trial', account, '--threshold', threshold)
+        assert code != 0 and not out
+    with sqlite3.connect(env.db) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM policy_trials').fetchone()[0] == 0
+
+
+def test_deferred_preview_is_read_only_scoped_and_rejects_counterfactual_threshold(env, capsys, monkeypatch):
+    import decisionpolicy
+    import decisiontrace
+    facts = dict(matches=1, where='indbakken', flagged=False, deleted=False,
+                 seen=False, old=False, mode='flag')
+    decision = decisionpolicy.decide_deferred('campaign_live', facts)
+    with sqlite3.connect(env.db) as conn:
+        decisiontrace.record(conn, 'bynet', 'private-id', 'campaign_live', decision, 1)
+        decisiontrace.record(conn, 'other-account', 'other-id', 'campaign_live', decision, 1)
+    original = env.db.read_bytes()
+    monkeypatch.setattr(engine, 'connect', lambda *a, **kw: pytest.fail('preview must not contact IMAP'))
+    code, out, err = run(capsys, monkeypatch, 'policy-preview', 'bynet', '--stage', 'campaign_live')
+    assert code == 0 and not err
+    result = json.loads(out)
+    assert result['sampled'] == 1 and result['invalid'] == 0
+    assert result['items'][0]['baseline_matches_current_policy']
+    assert result['items'][0]['candidate_reason'] == 'campaign_live_flag'
+    assert 'private-id' not in out and 'other-account' not in out
+    assert not result['automatic_activation']
+    code, out, err = run(capsys, monkeypatch, 'policy-preview', 'bynet', '--stage',
+                         'campaign_live', '--threshold', '12')
+    assert code != 0 and 'ny grænse' in err
+    assert env.db.read_bytes() == original
+    assert audit_records(env) == []

@@ -25,6 +25,7 @@ def _own_notification(eng, mail, h, kind="alert"):
     try:
         conn.execute("INSERT INTO mail_outbox(kind, recipient, subject, message_id, status, created_at) "
                      "VALUES(?, 'ole@bynet.example', 's', ?, 'sent', ?)", (kind, own, int(time.time())))
+        eng.mailidentity.bind(conn, "*notification*", own.strip("<>"), notify_mail(own.strip("<>")))
         conn.commit()
     finally:
         conn.close()

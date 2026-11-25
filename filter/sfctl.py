@@ -1865,6 +1865,110 @@ def cmd_backup_restore(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_backup_drill(args):
+    import restorecheck
+    bk = _backup_mod()
+    path, key = _archive_path(bk, args.file), _ask_key(args, bk)
+    try:
+        result = restorecheck.run(path, key, memory_mib=args.memory_mib)
+    except (restorecheck.DrillError, bk.BackupError) as ex:
+        audit("backup_startup_drill", result="failed", detail=type(ex).__name__)
+        raise CliError(str(ex)) from None
+    audit("backup_startup_drill", detail="app and Redis started on isolated restored copy")
+    out(json.dumps(result, ensure_ascii=False))
+    return EXIT_OK
+
+
+def cmd_quality_evaluate(args):
+    import quality
+    try:
+        result = quality.evaluate(quality.read_dataset(Path(args.file)))
+    except (ValueError, OSError) as ex:
+        raise CliError("Evaluering afvist: " + str(ex)) from None
+    out(json.dumps(result, ensure_ascii=False, indent=2))
+    return EXIT_OK
+
+
+def cmd_quality_compare(args):
+    import quality
+    try:
+        result = quality.compare(quality.read_dataset(Path(args.baseline)),
+                                 quality.read_dataset(Path(args.candidate)),
+                                 false_positive_cost=args.false_positive_cost,
+                                 min_per_class=args.min_per_class)
+    except (ValueError, OSError) as ex:
+        raise CliError("Sammenligning afvist: " + str(ex)) from None
+    out(json.dumps(result, ensure_ascii=False, indent=2))
+    # Success means valid evaluation, not an installation/activation decision.
+    return EXIT_OK
+
+
+def cmd_policy_trial(args):
+    import policytrial
+    if args.account not in {acc.name for acc in _accounts()}:
+        raise CliError("Ukendt postkasse.")
+    conn = sqlite3.connect(Path(ui.DB_PATH).resolve().as_uri() + '?mode=rw', uri=True)
+    try:
+        now = int(time.time())
+        if args.stop:
+            policytrial.stop(conn, args.account, now)
+            audit('policy_trial_stop', account=args.account)
+        elif args.threshold is not None:
+            try:
+                trial_id = policytrial.start(conn, args.account, args.threshold, now)
+            except ValueError as ex:
+                raise CliError(str(ex)) from None
+            audit('policy_trial_start', account=args.account, detail=f'trial={trial_id}; shadow only')
+        result = policytrial.status(conn, args.account)
+    finally:
+        conn.close()
+    out(json.dumps(result, ensure_ascii=False, indent=2))
+    return EXIT_OK
+
+
+def cmd_policy_preview(args):
+    import decisiontrace
+    try:
+        conn = sqlite3.connect(Path(ui.DB_PATH).resolve().as_uri() + '?mode=ro', uri=True)
+        try:
+            result = decisiontrace.preview(conn, args.account, threshold=args.threshold, limit=args.limit, stage=args.stage)
+        finally:
+            conn.close()
+    except ValueError as ex:
+        raise CliError('Prøve afvist: ' + str(ex)) from None
+    out(json.dumps(result, ensure_ascii=False, indent=2))
+    return EXIT_OK
+
+
+def cmd_quality_reserve(args):
+    import holdout
+    try:
+        with Path(args.file).open('rb') as f:
+            raw = f.read(10 * 1024 * 1024 + 1)
+        result = holdout.reserve(ui.DB_PATH, raw, args.sample_id)
+    except (holdout.HoldoutError, OSError) as ex:
+        raise CliError('Reservation afvist: ' + (str(ex) if isinstance(ex, holdout.HoldoutError)
+                                               else type(ex).__name__)) from None
+    audit('quality_reserve', detail=args.sample_id)
+    out(json.dumps(result, ensure_ascii=False, indent=2))
+    return EXIT_OK
+
+
+def cmd_quality_export(args):
+    import quality
+    with sqlite3.connect(ui.DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        accounts = [r[0] for r in conn.execute("SELECT DISTINCT account FROM scan_observations")]
+        rows = list(quality.export_sample(conn, accounts))
+    # Never overwrite a file or print message IDs to the terminal.
+    fd = os.open(args.to, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    out(f"{len(rows)} mærkede observationer eksporteret lokalt. Udvalget har selektionsbias; del ikke filen på GitHub.")
+    return EXIT_OK
+
+
 def cmd_backup_key(args: argparse.Namespace) -> int:
     """show: vis nøglen (kun én gang), status: findes den, id og hvornår den blev vist."""
     bk = _backup_mod()
@@ -2317,10 +2421,40 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("push-test", "send en testbesked nu til alle en brugers enheder", cmd_push_test)
     p.add_argument("user", metavar="BRUGER", help="brugernavnet (se sfctl users)")
     add("push-reset", "nødstop: fjern alle enheder med beskeder og lav en ny nøgle (VAPID)", cmd_push_reset)
+    p = add("policy-trial", "registrér en kandidatgrænse parallelt; ingen aktivering eller mailhandlinger", cmd_policy_trial)
+    p.add_argument("account", help="postkassens interne navn; uden tilvalg vises status")
+    trial = p.add_mutually_exclusive_group()
+    trial.add_argument("--threshold", type=float, help="start parallel prøve uden mailændringer")
+    trial.add_argument("--stop", action="store_true", help="stop registreringen; aktive regler bevares")
+    p = add("policy-preview", "afprøv gemte policy-input lokalt uden mailhandlinger", cmd_policy_preview)
+    p.add_argument("account", help="postkassens interne navn")
+    p.add_argument("--stage", choices=("scan", "ai_policy", "campaign_context", "campaign_score", "campaign_live"),
+                   default="scan", help="beslutningsfase (standard scan)")
+    p.add_argument("--threshold", type=float, default=None, help="prøv en anden scoregrænse; gemmes ikke")
+    p.add_argument("--limit", type=int, default=100, help="seneste antal mails, 1–200 (standard 100)")
+    p = add("quality-evaluate", "evaluér et lokalt mærket holdout-sæt uden træning", cmd_quality_evaluate)
+    p.add_argument("file", help="lokal JSONL-fil; se CONFIGURATION.md")
+    p = add("quality-reserve", "reservér lokal .eml mod fremtidig Bayes/fuzzy-læring", cmd_quality_reserve)
+    p.add_argument("file", help="lokal mailfil, højst 10 MiB; indholdet gemmes ikke i registret")
+    p.add_argument("--sample-id", required=True, help="neutralt ID, fx sample-001; ingen adresser eller emner")
+    p = add("quality-compare", "sammenlign baseline/kandidat på samme lokale prøveudvalg", cmd_quality_compare)
+    p.add_argument("baseline", help="lokal JSONL-fil med oprindelige afgørelser")
+    p.add_argument("candidate", help="lokal JSONL-fil med kandidatens afgørelser på samme mails")
+    p.add_argument("--false-positive-cost", type=int, default=10,
+                   help="pris for fanget rigtig post relativt til overset spam (standard 10)")
+    p.add_argument("--min-per-class", type=int, default=20,
+                   help="mindst så mange ham og spam pr. postkasse (standard 20; ingen statistisk garanti)")
+    p = add("quality-export", "eksportér eksplicitte brugerafgørelser lokalt (metadata, ingen mailtekst)", cmd_quality_export)
+    p.add_argument("--to", required=True, help="ny fil; oprettes med mode 0600")
     p = add("backup-now", "lav en krypteret backup nu (ellers hver nat fra kl. 02:30)", cmd_backup_now)
     p.add_argument("--if-older", type=float, default=None, metavar="TIMER",
                    help="kun hvis den seneste vellykkede backup er ældre end TIMER timer")
     add("backup-list", "vis de krypterede backups i /backup", cmd_backup_list)
+    p = add("backup-drill", "gendan midlertidigt og start app + Bayes isoleret uden mailarbejdere", cmd_backup_drill)
+    p.add_argument("file", metavar="FIL")
+    p.add_argument("--ask-key", action="store_true")
+    p.add_argument("--memory-mib", type=int, default=1024,
+                   help="højst MiB virtuel hukommelse pr. prøveproces, 128–4096 (standard 1024)")
     p = add("backup-verify", "dekrypter en backup og tjek alle kontrolsummer (skriver intet)", cmd_backup_verify)
     p.add_argument("file", metavar="FIL", help="filnavnet fra sfctl backup-list (eller en sti)")
     p.add_argument("--ask-key", action="store_true", help="spørg efter nøglen (fra kode-manageren)")

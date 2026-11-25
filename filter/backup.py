@@ -17,7 +17,7 @@ array, i.e. another disk than the nvme app dir):
             unbound*.conf, redis.conf when readable); unreadable files are
             listed as skipped in the manifest (they are regenerated from
             state/redis.password + state/controller.password).
-  redis/    dump.rdb: a fresh RDB of the Bayes data (`redis-cli --rdb`, the
+  redis/    dump.rdb: a fresh RDB of Bayes and bundled local fuzzy data (`redis-cli --rdb`, the
             replication snapshot: consistent, made by Redis itself).
 
 Archive format (`spamfilter-<UTC stamp>.sfbak`, mode 0600):
@@ -597,7 +597,8 @@ def verify(path: Path, key: bytes | None = None) -> dict[str, Any]:
             "version": manifest.get("version"), "skipped": manifest.get("skipped") or [],
             "warnings": manifest.get("warnings") or [], "redis": bool(manifest.get("redis")),
             # the local site configuration (own domains, webshops ...) is part of config/
-            "site_config": f"config/{SITE_CONFIG_NAME}" in names}
+            "site_config": f"config/{SITE_CONFIG_NAME}" in names,
+            "learning_stores": manifest.get("learning_stores")}
 
 
 def _inside(child: Path, parent: Path) -> bool:
@@ -664,6 +665,27 @@ def restore(path: Path, to_dir: Path, key: bytes | None = None) -> dict[str, Any
         raise
     return {"ok": True, "files": n, "bytes": total, "to": str(dest), "created": manifest.get("created"),
             "skipped": manifest.get("skipped") or [], "redis": bool(manifest.get("redis"))}
+
+
+def learning_stores(work: Path, redis_ok: bool) -> dict[str, Any]:
+    """Authenticated inventory of the bundled local fuzzy Redis profile.
+
+    A declaration is not live configuration introspection. Custom backends
+    cannot be called covered just because a Redis snapshot succeeded.
+    """
+    worker = work / 'appdata/rspamd/local.d/worker-fuzzy.inc'
+    backend = 'unknown'
+    if worker.is_file():
+        text = re.sub(r'#[^\n]*', '', worker.read_text())
+        values = re.findall(r'\bbackend\s*=\s*["\']?([A-Za-z_]+)', text)
+        if values == ['redis'] and not re.search(r'\b(?:servers|read_servers|write_servers)\s*=', text):
+            backend = 'redis'
+        else:
+            backend = 'custom_or_unknown'
+    return {'bayes': 'redis/dump.rdb' if redis_ok else None,
+            'local_fuzzy': {'backend': backend,
+                            'snapshot': 'redis/dump.rdb' if backend == 'redis' and redis_ok else None,
+                            'basis': 'saved_local_config_only'}}
 
 
 # ---------------------------------------------------------------- snapshot
@@ -1003,7 +1025,7 @@ def summary(now: float | None = None) -> dict[str, Any]:
     out = {
         "state": state, "tone": tone, "text": texts[state], "ts": st.get("ts"), "archive": st.get("archive"),
         "size": st.get("size"), "error": st.get("error"), "warnings": st.get("warnings") or [],
-        "files": st.get("files"), "last_ok_ts": last_ok, "last_ok_archive": st.get("last_ok_archive"),
+        "files": st.get("files"), "learning_stores": st.get("learning_stores"), "last_ok_ts": last_ok, "last_ok_archive": st.get("last_ok_archive"),
         "age_s": age, "alert": bool(alert), "mounted": mounted, "dest": str(BACKUP_DIR),
         "pruned": st.get("pruned") or [], "key": key_status(),
     }
@@ -1106,6 +1128,11 @@ def run_backup(*, reason: str = "nightly", now: float | None = None) -> dict[str
             work.mkdir(mode=0o700)
             try:
                 entries, skipped, warnings, redis_ok = stage(work)
+                stores = learning_stores(work, redis_ok)
+                if stores['local_fuzzy']['backend'] == 'custom_or_unknown':
+                    warnings.append('Lokal fuzzy-backend afviger fra Redis-profilen; fuzzy-data er ikke dokumenteret medtaget.')
+                elif stores['local_fuzzy']['backend'] == 'unknown':
+                    warnings.append('Lokal fuzzy-konfiguration kunne ikke verificeres; Redis-kopien er ikke et fuzzy-gendannelsesbevis.')
                 staged = sum(e.size for e in entries)
                 dfree = shutil.disk_usage(BACKUP_DIR).free
                 if dfree < staged + 64 * 2**20:
@@ -1114,7 +1141,7 @@ def run_backup(*, reason: str = "nightly", now: float | None = None) -> dict[str
                 manifest = {
                     "format": FORMAT, "created": created, "version": VERSION, "reason": st["reason"],
                     "files": [{"name": e.name, "size": e.size, "sha256": e.sha256, "mode": e.mode} for e in entries],
-                    "skipped": skipped, "warnings": warnings, "redis": redis_ok,
+                    "skipped": skipped, "warnings": warnings, "redis": redis_ok, "learning_stores": stores,
                 }
                 name = f"spamfilter-{_stamp(t0)}{SUFFIX}"
                 out = BACKUP_DIR / name
@@ -1125,7 +1152,8 @@ def run_backup(*, reason: str = "nightly", now: float | None = None) -> dict[str
                 shutil.rmtree(work, ignore_errors=True)
             # Read back what is on disk before calling it a success.
             verify(out, key)
-            pruned = prune(protect=[name], now=t0)
+            pruned = (prune(protect=[name], now=t0) if redis_ok and
+                      stores['local_fuzzy']['backend'] != 'custom_or_unknown' else [])
     except BackupError as ex:
         log.warning("encrypted backup failed: %s", ex)
         return finish(error=str(ex)[:300])
@@ -1135,11 +1163,11 @@ def run_backup(*, reason: str = "nightly", now: float | None = None) -> dict[str
     log.info("encrypted backup %s: %d files, %d bytes%s", name, len(entries), size,
              f", {len(warnings)} warning(s)" if warnings else "")
     # Bayes missing = not a full success (the 48 h alert keeps watching).
-    full = redis_ok
+    full = redis_ok and stores['local_fuzzy']['backend'] != 'custom_or_unknown'
     return finish(ok=full, archive=name, size=size, files=len(entries), warnings=warnings,
                   error=None if full else warnings[0][:300], pruned=pruned,
                   last_ok_ts=int(t0) if full else st["last_ok_ts"],
-                  last_ok_archive=name if full else st["last_ok_archive"])
+                  last_ok_archive=name if full else st["last_ok_archive"], learning_stores=stores)
 
 
 # ---------------------------------------------------------------- schedule

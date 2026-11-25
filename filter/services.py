@@ -29,6 +29,7 @@ import os
 import re
 import socket
 import sqlite3
+import mailidentity
 import ssl
 import time
 from contextlib import closing
@@ -89,6 +90,7 @@ _LEARN_NOTE = {
                   "have, så afmeld dem i mailen.",
     "already": " (var allerede lært)",
     "declined": " – filteret genkendte den allerede, så der var intet nyt at lære.",
+    "held_out": " – ikke brugt til læring, fordi indholdet er reserveret til evaluering.",
     "rate_limited": " – læring udskudt: grænsen pr. time er nået.",
     "error": " – læring fejlede: rspamd svarede ikke.",
     "too_large": " – for stor til at blive lært (over 5 MB).",
@@ -163,6 +165,19 @@ def _threat_of(conn: sqlite3.Connection, account: str, mid: str) -> tuple[str | 
     try:
         row = conn.execute("SELECT threat, threat_detail FROM messages WHERE account=? AND message_id=?",
                            (account, mid)).fetchone()
+        if (row is None or not row[0]) and mid.startswith(mailidentity.PREFIX):
+            identity = mailidentity.binding(conn, account, mid)
+            if identity and identity[0] and identity[0] != mid:
+                scanned = conn.execute('SELECT scanned_at FROM messages WHERE account=? AND message_id=?',
+                                       (account, mid)).fetchone()
+                original = mailidentity.binding(conn, account, identity[0])
+                if original is None or scanned is None or scanned[0] is None:
+                    # A new alias must not discard an old virus restriction
+                    # before this concrete payload has had its own scan.
+                    legacy = conn.execute('SELECT threat, threat_detail FROM messages '
+                                          'WHERE account=? AND message_id=?', (account, identity[0])).fetchone()
+                    if legacy and legacy[0]:
+                        row = legacy
     except sqlite3.Error:
         return None, None
     if row is None or not row[0]:
@@ -598,6 +613,12 @@ def _record_verdict(db: Any, eng: Any, acc: Any, mid: str, *, folder: str, verdi
         except Exception:
             pass
     with db.tx():
+        retained_threat, retained_detail = _threat_of(db.conn, acc.name, mid)
+        if raw is not None and hasattr(eng, "normalize_message_id"):
+            # The real engine has the additive identity table. Fake engines
+            # used by old versions may expose only the original interface.
+            if db.conn.execute("SELECT 1 FROM sqlite_master WHERE name='mail_identity'").fetchone():
+                mailidentity.bind(db.conn, acc.name, eng.parse_envelope(raw)[0], raw)
         db.conn.execute(
             """
             INSERT INTO messages(account, message_id, first_seen, last_seen,
@@ -633,6 +654,15 @@ def _record_verdict(db: Any, eng: Any, acc: Any, mid: str, *, folder: str, verdi
         if not keep_pending_move:
             db.conn.execute("DELETE FROM pending_move WHERE account=? AND message_id=?",
                             (acc.name, mid))
+        if retained_threat:
+            db.conn.execute('UPDATE messages SET threat=?, threat_detail=? WHERE account=? AND message_id=?',
+                            (retained_threat, retained_detail, acc.name, mid))
+        if verdict == 'ham':
+            undo_auto = getattr(eng, '_junk_rules_after_user_ham', None)
+            if undo_auto is not None:
+                saved = db.conn.execute('SELECT sender FROM messages WHERE account=? AND message_id=?',
+                                        (acc.name, mid)).fetchone()
+                undo_auto(db, log, acc, mid, saved[0] if saved else sender)
         db.log_event(event, mid, detail=f"actor={actor}" if actor else None)
     if stat:
         # Outside the transaction: bump_stat may manage its own commit.
@@ -656,6 +686,8 @@ def _do_release(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, Any
         return _res(mid, False, "ambiguous", "Flere beskeder har samme Message-ID – intet er ændret.")
     uid = uids[0]
     raw, flags = _fetch_body(sess.client, uid, eng.MAX_FETCH_BYTES)
+    if hasattr(eng, 'mailidentity') and not _bind_selected(eng, db, acc, mid, raw):
+        return _res(mid, False, "identity_changed", "Beskeden kunne ikke identificeres sikkert. Søg igen.")
     if folder == fmap["inbox"]:
         # Already in the inbox (shadow/flag mode): drop our $Junk mark only
         # if the filter set one, so shadow mode stays write-free.
@@ -706,7 +738,7 @@ def _do_release(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, Any
     _record_verdict(db, eng, acc, mid, folder=fmap["inbox"], verdict="ham", actor=actor,
                     our_action="manual_release", moved_to_junk=False, learn_outcome=outcome,
                     raw=raw, stat="released", event="manual_release")
-    learned_ok = outcome in ("learned", "already", "declined")
+    learned_ok = outcome in ("learned", "already", "declined", "held_out")
     note = " og lært som legitim." if outcome == "learned" else _learn_note(outcome, "ham")
     if outcome == "already":
         note = " og lært som legitim" + note + "."
@@ -753,10 +785,18 @@ def _do_mark_spam(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, A
                     our_action="manual_mark_spam", moved_to_junk=moved, learn_outcome=outcome,
                     raw=raw, stat="marked_spam", event="manual_mark_spam")
     _revoke_auto_allow(eng, db, acc, mid, raw)
+    # The same explicit correction in the WebUI and mail app must reach
+    # the same deduplicated, authenticated per-mailbox automation.
+    feedback = getattr(eng, '_junk_rules_after_user_junk', None)
+    if feedback is not None:
+        saved = db.conn.execute('SELECT sender FROM messages WHERE account=? AND message_id=?',
+                                (acc.name, mid)).fetchone()
+        with db.tx():
+            feedback(db, log, acc, mid, saved[0] if saved else None, explicit=True)
     if outcome != "newsletter":
         # A newsletter one person does not want is no campaign for the others.
         _campaign_after_spam(eng, db, acc, mid, raw, actor, "manual_mark_spam", outcome)
-    learned_ok = outcome in ("learned", "already", "declined", "newsletter")
+    learned_ok = outcome in ("learned", "already", "declined", "held_out", "newsletter")
     note = " og lært som spam." if outcome == "learned" else _learn_note(outcome, "spam")
     if outcome == "already":
         note = " og lært som spam" + note + "."
@@ -865,7 +905,7 @@ def _do_learn(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, Any],
     label = "legitim" if kind == "ham" else "spam"
     if outcome in ("learned", "already"):
         return _res(mid, True, "ok", f"Lært som {label}{_LEARN_NOTE[outcome]}.")
-    if outcome == "declined":   # already in that class: done, nothing to learn
+    if outcome in ("declined", "held_out"):
         return _res(mid, True, "ok", f"Markeret som {label}{_learn_note(outcome, kind)}")
     return _res(mid, False, f"learn_{outcome}",
                 f"Markeret som {label}{_LEARN_NOTE.get(outcome, ' – læring fejlede.')}")
@@ -2020,6 +2060,21 @@ def find_mail(account: str, text: str, since_days: int = 30, folders: Iterable[s
                 if newest:
                     data = client.fetch(newest, [b"ENVELOPE", b"INTERNALDATE", b"FLAGS"])
                     group["hits"] = [_envelope_hit(u, data[u]) for u in newest if u in data]
+                    if hasattr(eng, 'mailidentity'):
+                        with closing(_open_db(eng)) as conn:
+                            for hit in group['hits']:
+                                raw, _flags = _fetch_body(client, hit['uid'], eng.MAX_FETCH_BYTES)
+                                if raw is None:
+                                    hit['message_id'] = None
+                                    continue
+                                wire = eng.parse_envelope(raw)[0]
+                                legacy = bool(wire and conn.execute(
+                                    'SELECT 1 FROM messages WHERE account=? AND message_id=?',
+                                    (acc.name, wire)).fetchone()
+                                    and mailidentity.binding(conn, acc.name, wire) is None)
+                                hit['message_id'] = mailidentity.bind(conn, acc.name, wire, raw,
+                                                                     legacy_exists=legacy)
+                            conn.commit()
             except Exception as ex:
                 log.info("find_mail in %s failed: %s", t["name"], type(ex).__name__)
                 out["errors"].append({"folder": t["name"], "label": t["label"],
@@ -2129,6 +2184,7 @@ def _premark_inbox(db: Any, acc: Any, mid: str, *, inbox: str, verdict: str | No
         (acc.name, mid)).fetchone()
     snapshot = dict(prev) if prev is not None else None
     with db.tx():
+        retained_threat, retained_detail = _threat_of(conn, acc.name, mid)
         conn.execute(
             """
             INSERT INTO messages(account, message_id, first_seen, last_seen, current_folder,
@@ -2154,6 +2210,11 @@ def _premark_inbox(db: Any, acc: Any, mid: str, *, inbox: str, verdict: str | No
             conn.execute("UPDATE messages SET verdict_by=COALESCE(verdict_by, ?) "
                          "WHERE account=? AND message_id=?", (by or None, acc.name, mid))
         conn.execute("DELETE FROM pending_move WHERE account=? AND message_id=?", (acc.name, mid))
+        if retained_threat:
+            # Keep known danger on an alias before the inbox worker sees
+            # the move. A later mail-program rescue must not learn it ham.
+            conn.execute('UPDATE messages SET threat=?, threat_detail=? WHERE account=? AND message_id=?',
+                         (retained_threat, retained_detail, acc.name, mid))
     return snapshot
 
 
@@ -2187,6 +2248,15 @@ def _after_learn(db: Any, acc: Any, mid: str, outcome: str) -> None:
                 "WHERE account=? AND message_id=?", (now, acc.name, mid))
 
 
+def _bind_selected(eng: Any, db: Any, acc: Any, mid: str, raw: bytes | None) -> bool:
+    """Bind the explicit selection before an inbox worker can observe its move."""
+    if raw is None:
+        return False
+    wire = eng.parse_envelope(raw)[0]
+    with db.tx():
+        return mailidentity.bind(db.conn, acc.name, wire, raw) == mid
+
+
 def _move_one_to_inbox(eng: Any, db: Any, acc: Any, client: Any, fmap: dict[str, Any],
                        caps: frozenset, folder: str, uid: int, mid: str, *, learn: bool,
                        verdict: str | None, by: str, actor: str, event: str, detail: str,
@@ -2206,8 +2276,10 @@ def _move_one_to_inbox(eng: Any, db: Any, acc: Any, client: Any, fmap: dict[str,
     except Exception:
         pass
     raw = None
-    if learn:
+    if learn or hasattr(eng, 'mailidentity'):
         raw, _f = _fetch_body(client, uid, eng.MAX_FETCH_BYTES)
+    if hasattr(eng, 'mailidentity') and not _bind_selected(eng, db, acc, mid, raw):
+        return False, "identity_changed", None
     snapshot = _premark_inbox(db, acc, mid, inbox=fmap["inbox"], verdict=verdict, by=by,
                               sender=sender, subject=subject,
                               received_at=_ts(meta.get(b"INTERNALDATE")))
@@ -3259,7 +3331,8 @@ _LEARN_LIST_STATUS_TEXT = {
 }
 _ITEM_STATUS_TEXT = {
     "pending": "Venter", "learned": "Lært", "already": "Var allerede lært",
-    "declined": "rspamd ville ikke lære den", "not_found": "Mailen findes ikke længere",
+    "declined": "rspamd ville ikke lære den", "held_out": "Reserveret til evaluering – ikke trænet",
+    "not_found": "Mailen findes ikke længere",
     "ambiguous": "Flere forskellige mails med samme Message-ID – sprunget over",
     "too_large": "For stor (over 5 MB)", "deferred": "Udskudt – prøv igen om 10 minutter",
     "failed": "Fejlede",
@@ -3982,6 +4055,13 @@ def weekly_data(week: str | None = None, *, account: str | None = None,
     try:
         with closing(_open_db_ro(eng)) as conn:
             ext_url = _settings_kv(conn, "external_url")
+            try:
+                import correctionfollowup
+                out["correction_followup"] = correctionfollowup.summarize(
+                    conn, names, since, until, authenticated=getattr(eng, 'from_authenticated', None))
+            except sqlite3.Error:
+                out["correction_followup"] = []
+
             q = ",".join("?" * len(WEEKLY_METRICS))
             for label, dset in (("cur", days), ("prev", prev_days)):
                 for r in conn.execute(
@@ -4140,6 +4220,16 @@ def render_weekly(data: dict[str, Any], *, full: bool = True, preview: bool = Fa
     lines: list[str] = ["Hej", "", f"Ugerapport for uge {week_no} ({data.get('span', '')}).", ""]
     blocks: list[str] = [f"<p>Hej</p><p><strong>Ugerapport for uge {_html.escape(week_no)}</strong> "
                          f"({_html.escape(str(data.get('span', '')))}).</p>"]
+    import correctionfollowup
+    for item in data.get('correction_followup') or []:
+        if not item['sample_size']:
+            continue
+        name = next((a['name'] for a in data.get('accounts', []) if a['account'] == item['account']), item['account'])
+        title = 'Opfølgning på spamrettelser: ' + str(name)
+        detail = correctionfollowup.lines(item)
+        lines += [title, *detail, '']
+        blocks.append('<p><strong>' + _html.escape(title) + '</strong></p><ul>' +
+                      ''.join('<li>' + _html.escape(line) + '</li>' for line in detail) + '</ul>')
     shop = data.get("webshop") or {}
     if shop.get("line"):
         lines += [shop["line"]]

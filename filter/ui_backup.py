@@ -87,11 +87,14 @@ def card() -> str:
             dtxt, dtone = f"seneste lykkedes {adm._age_text(dr.get('age_s'))} siden – over {dr.get('every_days')} dage", "warn"
         else:
             dtxt, dtone = (f"lykkedes {adm._age_text(dr.get('age_s'))} siden ({str(dr.get('archive') or '')[:80]}"
-                           " hentet ud af huset og tjekket)"), "ok"
-        pairs.append(("Gendannelsesøvelse", f'{kit.status_dot(dtone)} {h(dtxt)}'))
+                           " hentet ud af huset og kontrolleret; se resultatets omfang)"), "ok"
+        pairs.append(("Gendannelseskontrol efter download", f'{kit.status_dot(dtone)} {h(dtxt)}'))
+        if dr.get('detail'):
+            pairs.append(("Kontrollens omfang", h(str(dr['detail'])[:300])))
     elif off and not off.get("skipped"):
-        pairs.append(("Gendannelsesøvelse", '<span class="muted">ikke kørt endnu (hver 30. dag efter kopien ud af huset)</span>'))
-    extra = ""
+        pairs.append(("Gendannelseskontrol efter download", '<span class="muted">ikke kørt endnu (hver 30. dag efter kopien ud af huset)</span>'))
+    extra = kit.alert("Gamle øvelser kontrollerede kun arkivet. Fra 2.15 starter den månedlige øvelse også "
+                      "webapplikationen og Redis/Bayes i en midlertidig kopi uden mailarbejdere (sfctl backup-drill).", "info")
     for w in (s.get("warnings") or [])[:3]:
         extra += kit.alert(str(w)[:240], "warn")
     if not s.get("mounted"):

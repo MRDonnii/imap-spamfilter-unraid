@@ -308,6 +308,27 @@ sys.exit(0 if res.get("success") else 1)
   fi
 fi
 
+# A real encrypted restore, actual Redis RDB loading and the HTTP server:
+# all on temporary data inside the throwaway smoke container. Mail workers
+# never start in the restored copy and both new listeners are Unix sockets.
+if (( learn )); then
+  log "Restore startup drill: encrypted snapshot -> private copy -> app + Bayes"
+  drill_py='
+import tempfile
+from pathlib import Path
+import backup, restorecheck
+with tempfile.TemporaryDirectory(prefix="sf-smoke-backup-") as tmp:
+    backup.configure(backup_dir=Path(tmp))
+    backup.REQUIRE_MOUNT = False
+    status = backup.run_backup_isolated(reason="smoke")
+    assert status.get("ok"), "encrypted smoke snapshot failed"
+    result = restorecheck.run(Path(tmp) / status["archive"])
+    assert result["ok"] and result["app_started"] and result["redis_keys"] > 0
+    print("restore startup drill: app + Bayes loaded; no mail workers or IP listeners")
+'
+  check docker exec -u "$FILTER_UID:$FILTER_GID" -w /app "$name" /usr/local/bin/python3 -c "$drill_py"
+fi
+
 if (( clamscan )); then
   (( clamav_on )) || die "--clamav-scan needs ClamAV on (SF_CLAMAV is 0)"
   wait_s=${SF_CLAMAV_WAIT:-900}

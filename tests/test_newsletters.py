@@ -376,7 +376,9 @@ def test_kept_message_id_alone_never_skips_scoring(eng, monkeypatch):
     deliver_news(h, "n1@x", score=20.0, subject="Din konto er spærret")
     h.scan()
     assert len(h.rspamd.scan_calls) == calls + 1
-    assert h.row("n1@x")["our_action"] == "pending_move"
+    assert h.row("n1@x")["our_action"] == nl.ACTION_KEPT
+    assert h.db.conn.execute("SELECT COUNT(*) FROM messages WHERE message_id LIKE 'sf-local:%' "
+                             "AND our_action='pending_move'").fetchone()[0] == 1
 
 
 def test_interrupted_copy_is_repaired(eng, monkeypatch):

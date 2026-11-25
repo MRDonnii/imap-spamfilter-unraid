@@ -214,6 +214,18 @@ Oversigten viser også, hvor mange der venter i Tjek disse.
 
 Farlige mails og mails, der er fanget ved genscanning, vises aldrig under Tjek disse.
 
+Næsten sikker spam vises heller ikke (2.19–2.20), så listen kun holder det, der kan være en god mail:
+
+- afsendere, som du eller en anden i husstanden allerede har kaldt spam
+- mails, som den lokale AI med høj sikkerhed kalder spam eller phishing
+- mails fra en afsender, der aldrig har fået en mail igennem til indbakken før, når den ikke består DMARC, har et
+  faretegn, et link på en spamliste, eller Bayes-filteret er næsten sikkert
+- mails, der kun står der, fordi de gik til en beskyttet adresse, når scoren er mindst 10 over grænsen
+
+Kortet siger, hvor mange der er skjult. **Vis dem alligevel** viser dem, og de ligger stadig i Spamfilter-mappen.
+Fangede mails lige over grænsen får også den lokale AI's vurdering. Den flytter eller frigiver aldrig noget, men
+mener den, at mailen er ægte, står der "Den lokale AI mener, at den er ægte", og mailen bliver på listen.
+
 ---
 
 ## Træk mails ind og ud af Spamfilter i mailprogrammet
@@ -223,11 +235,13 @@ Det virker i alle mailprogrammer: iPhone Mail, Outlook, Gmail-appen med IMAP, Th
 **Spam i indbakken?** Træk mailen over i mappen **Spamfilter**:
 
 - Filteret lærer, at den slags er spam.
-- Var afsenderen tidligere blevet tilladt automatisk (se nedenfor), fjernes den automatiske tilladelse igen. Regler, du selv har lavet, bliver ikke rørt, og der oprettes ingen blokering.
+- Var afsenderen tidligere blevet tilladt automatisk (se nedenfor), fjernes den automatiske tilladelse igen. Regler, du selv har lavet, bliver ikke rørt.
+- Fra 2.18 huskes gentagen spam: Tre nye rettelser af forskellige mails fra samme bekræftede adresse inden for 30 dage kan blokere adressen automatisk for netop din postkasse. Det gælder også **Flyt til spam** i WebUI. Gamle rettelser ved opgraderingen tæller ikke med. Du kan slå det fra under kontoens **Husk gentagen spam automatisk**; eksisterende regler fjernes særskilt under Regler/Tjek disse.
 
 **Rigtig mail i Spamfilter?** Træk den tilbage til **Indbakken**:
 
 - Filteret lærer, at den ikke er spam, og flytter aldrig den mail igen.
+- En blokering fra den nye gentagen-spam-automatik fjernes og tællegrundlaget nulstilles. En fortrudt automatisk blokering bliver ikke oprettet igen af sig selv; håndlavede regler bevares.
 - **Afsenderen bliver automatisk tilladt** for den postkasse (kun den præcise adresse). Den næste mail fra dem kommer altså også igennem.
 - Er afsenderen sat til **Altid igennem**, laves der ingen ekstra regel. Den regel gælder allerede.
 
@@ -837,3 +851,10 @@ docker exec -it spamfilter sfctl <kommando>
 | Udefra siger login hele tiden "Siden var udløbet", eller en side siger "Sikkerhedstokenet passede ikke" | Skriv adressen under **Indstillinger → Adgang udefra → Ekstern adresse**. Den skal være præcis den adresse, du åbner, med `https://`. Tjek også, at TRUSTED_PROXIES er sat. Se [CLOUDFLARE-TUNNEL.md](CLOUDFLARE-TUNNEL.md). |
 
 Kommer du ikke videre, så kig i **Drift → Ændringslog**. Alle administrative handlinger står i revisionsloggen.
+
+
+## Kontrol af dækning (2.15)
+
+Administrator kan under **Drift** se, hvor mange scanninger, læste/store mails og fejlede forsøg der er registreret pr. postkasse de seneste 14 dage. Det er hændelsestal og ikke en procent for, hvor god filtreringen er. Filteret arbejder efter mailens levering, så en telefon kan nå at vise en notifikation. Ingen scanning finder alle trusler; allerede læst post, størrelsesgrænsen og et utilgængeligt virustjek begrænser dækningen.
+
+Mails uden Message-ID bliver nu også scannet. Filteret husker frigivelsen af den konkrete mail ud fra dens indhold. En ny mail med samme ID, men andet indhold, vurderes selvstændigt. En almindelig tilladelse tilføjet under ventetiden kan aflyse flytningen, når afsender- og trusselskontrollen tillader det.

@@ -110,7 +110,9 @@ def test_force_allow_beats_an_earlier_spam_verdict_on_the_message_id(eng, monkey
     h.deliver("dup@x", score=30, sender="support@vexar.example")
     _sym(h, "dup@x", "R_SPF_FAIL")
     h.scan()
-    assert h.row("dup@x")["our_action"] == "allowlisted" and h.db.count_pending_moves() == 0
+    assert h.row("dup@x")["user_verdict"] == "spam"  # original record is preserved
+    assert h.db.conn.execute("SELECT COUNT(*) FROM messages WHERE our_action='allowlisted'").fetchone()[0] == 1
+    assert h.db.count_pending_moves() == 0
 
 
 def test_block_rules_unchanged_and_more_specific_block_still_wins(eng, monkeypatch):
@@ -143,15 +145,16 @@ def test_force_rule_added_during_grace_cancels_the_move(eng, monkeypatch):
     assert h.db.count_pending_moves() == 0
 
 
-def test_normal_allow_rule_added_during_grace_does_not_cancel(eng, monkeypatch):
-    """Unchanged 2.0.2 behaviour: only 'Altid igennem' re-checks at move time."""
+def test_normal_allow_rule_added_during_grace_cancels(eng, monkeypatch):
+    """A current ordinary allow is re-evaluated with the original safety evidence."""
     h = Harness(eng, monkeypatch, mode="move")
     h.deliver("s@x", score=30, sender="support@vexar.example")
     h.scan()
     eng.add_sender_rule(h.db.conn, "*", "@vexar.example", "allow")
     h.advance(3600)
     h.moves()
-    assert h.client.msgids("Junk") == ["s@x"]
+    assert h.client.msgids("INBOX") == ["s@x"]
+    assert h.db.count_pending_moves() == 0
 
 
 SRS_ENVELOPE = "SRS0=N7BF=IH=gazeta.ie=user@mail.vexar.example"

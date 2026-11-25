@@ -183,3 +183,45 @@ Scriptenes indhold kopieres direkte ind i User Scripts, så de kører ikke fra a
 | Er alle konti indlæst? | `docker logs spamfilter 2>&1 \| grep "loaded"` |
 | Kun rspamds linjer | `docker logs --since 1h spamfilter 2>&1 \| grep '^\[rspamd\]'` |
 | Lytter kun WebUI'en udadtil? | `docker exec spamfilter sf-health listeners` |
+
+## 2.19.0 beta: installation og kontrol
+
+Denne udgivelse leveres som signeret kildepakke til den eksisterende WebUI-opdatering. Vælg **System → Opdateringer → Beta**, kontroller version 2.19.0 og brug **Opdatér nu**, når du vil installere. Værtshjælperen verificerer pakken og bygger containeren lokalt som beskrevet ovenfor. Der publiceres ikke et nyt GHCR-image i denne kildebaserede udgivelse; CI bygger og prøver begge images, og all-in-one-prøven bruger en tom testinstallation.
+
+Tag en aktuel backup før installation. Efter opdateringen: kontroller versionsnummer, `sfctl doctor`, kontoernes forbindelser og **Drift → Scanningens dækning**. Dækningstabellen kræver nye hændelser; gamle brugerrettelser uden en ny første-scanningsobservation kan ikke indgå i den nye evaluering. En ældre frigivelse uden indholdsfingerprint kan kræve genfrigivelse, hvis mailen leveres til indbakken på ny.
+
+Den eksisterende opdateringsmekanisme bevarer det tidligere image og kildebackup til teknisk rollback. Skemaændringerne er additive, men gammel kode har igen de ID-fejl, som 2.15 retter. Brug derfor ikke en rollback som en vedvarende sikkerhedsløsning. Ved fuld datagendannelse skal kode, state og Redis passe sammen; følg BACKUP.md. Denne udgivelses arbejde ændrer ikke i sig selv din server eller dine postkasser.
+
+
+**Ældre beskeder:** Hvis en handling på en gammel post siger, at mailen ikke findes, brug **Find en mail** på afsender/emne og vælg den konkrete kopi. Gamle ID'er uden indholdsbinding bruges ikke til at genfinde post til læring eller reparation. Dette kan også efterlade gamle afbrudte kopiflytninger til manuel kontrol. Eksisterende virusmarkeringer mister ikke administratorkravet ved denne genfinding.
+
+
+**Nyt i 2.16:** Sammenligning/reservation af lokale prøver, beslutningsspor,
+read-only grænsepreview, parallel kandidatgrænse pr. konto, AI-proveniens,
+rettelse af forsinkede AI-grænser og historiske forklaringer. Drift viser
+antivirus/alder og ventende arbejde; manglende målinger er ukendte. Ingen
+kandidat aktiveres automatisk, og ingen ny familietræfsikkerhed er målt.
+
+Den separate gendannelsesprøve startes bevidst på værten med
+`deploy/aio/restore-stack-drill.sh`, som beskrevet i BACKUP.md. Den bruger en
+privat kontoløs kopi uden netværk eller publicerede porte. App/Rspamd/Redis/
+Unbound kontrolleres; ClamAV-signaturer og udbyderlogin er undtaget. Den
+månedlige eksisterende app/Redis-prøve erstattes ikke automatisk.
+
+Ved rollback til kode før 2.16 håndhæves hverken de nye læringsreservationer
+eller rettelsen af forsinkede AI-grænser. De additive tabeller kan blive
+liggende, men gamle programmer kan lære af reserveret materiale. Gem derfor
+vurderingsgrundlaget separat, og planlæg rollback bevidst.
+
+**Nyt i 2.17:** Personlige valg om legitime nyhedsbreve starter ikke længere
+kampagner på andre postkasser. AI- og kampagnefaser kan gengives fra lokale
+beslutningsspor med `sfctl policy-preview --stage`. Kampagner respekterer også
+frigivelser, nye tilladelser, hævede scoregulve og stop under IMAP-kontrollen.
+De nye AI-angrebsprøver bruger syntetiske data; reel modelkvalitet og kalibrering
+kræver fortsat ejerens lokale, menneskeligt mærkede udvalg.
+
+**Nyt i 2.18:** **Husk gentagen spam automatisk** er slået til som standard pr.
+konto. Kun tre nye, forskellige og afsenderbekræftede brugerrettelser inden
+for 30 dage tæller; gammel historik udløser ingen blokering ved installation.
+Slå eventuelt fra under kontoen før de nye rettelser. Højst fem nye regler
+pr. konto pr. døgn. Se CONFIGURATION.md for præcis afgrænsning og fortrydelse.

@@ -28,7 +28,9 @@
 #      downloaded (rclone copyto) into a temp dir inside the backup dir
 #      (/backup/.restore-drill.XXXXXX in the container), checked by the
 #      container with `sfctl backup-verify` (decrypts to nowhere, checks
-#      every sha256, writes nothing) and the temp dir is removed again.
+#      every sha256, writes nothing), then `sfctl backup-drill` starts the
+#      restored app + Redis on private Unix sockets without mail workers.
+#      The temp dir is removed again after both checks.
 #      Result: state/restore-drill.json {ok, ts, archive, detail, error}
 #      (0644; Drift -> Krypteret backup and host-monitor show it); a failed
 #      drill notifies, the copy itself still counts as done.
@@ -211,8 +213,14 @@ restore_drill() {
               "/backup/$(basename "$DRILL_TMP")/$name" 2>&1)"; then
     first="$(grep -m1 '^OK: ' <<<"$out" || true)"
     if [[ -n "$first" ]]; then
-      write_drill true "$name" "${first:0:240}" "" || true
-      log "restore drill ok: $name"
+      if out="$(timeout 1800 docker exec -u 10099:10099 spamfilter sfctl backup-drill \
+                  "/backup/$(basename "$DRILL_TMP")/$name" 2>&1)" &&
+         jq -e '.ok == true and .app_started == true and .network == "unix_sockets_only"' >/dev/null 2>&1 <<<"$out"; then
+        write_drill true "$name" "OK: arkiv, SQLite, applikationsstart og Redis/Bayes kontrolleret isoleret" "" || true
+        log "restore drill ok: $name (app + Bayes started in isolated copy)"
+      else
+        drill_fail "$name" "sfctl backup-drill fejlede; arkivet var læsbart, men gendannet opstart er ikke bekræftet"
+      fi
     else
       drill_fail "$name" "sfctl backup-verify gav intet OK"
     fi

@@ -161,6 +161,7 @@ Filen har en `defaults:`-blok og en `accounts:`-liste. En nøgle på kontoen vin
 | `trusted_forwarders` | `[mail.vexar.example, 203.0.113.109]` | Videresendere, som filteret kigger forbi |
 | `protected_recipients` | [] | Beskyttede modtageradresser |
 | `protected_threshold` | 18.0 | Grænse for mails til beskyttede adresser |
+| `auto_block_repeated_spam` | true | (2.18) Husk gentagen bekræftet spam for den enkelte konto; se nedenfor |
 | `auto_allow_on_rescue` | true | Tillad afsenderen, når en mail trækkes ud af Spamfilter |
 | `daily_report` | false | Daglig kvittering i indbakken |
 | `report_hour` | 7 | Klokkeslæt for kvitteringen (0–23) |
@@ -401,3 +402,318 @@ Siden **Filtrering → AI-vurdering** (`/ai`, kun administratorer). Ingen nøgle
 - **2.3.6 Home Assistant:** `GET /api/v1/ha` (kun hjemmenetværket + bearer-nøgle, ellers 404 for alle metoder). Nøglen oprettes under **Indstillinger → Home Assistant** eller med `sfctl ha-token`; kun dens sha256 gemmes (`settings_kv`). Se [HOME-ASSISTANT.md](HOME-ASSISTANT.md) og [SECURITY.md](SECURITY.md).
 - **2.11.0 API-nøgler:** flere navngivne nøgler til programmer under **Konti og adgang → Adgang for programmer** (eller `sfctl api-key`), gemt som sha256 i tabellen `ui_api_keys`. Den gamle Home Assistant-nøgle flyttes automatisk og virker videre. Login fra Kontrolrum (SSO) er flyttet til samme side.
 - **2.3 tillid:** `TH_KNOWN_CONTACT` (−4/−3/−2), `TH_KNOWN_DOMAIN` (−1), `TH_REPLY` (−5), `TH_REPLY_THREAD` (−2), `TH_REPLY_UNVERIFIED` (0), `TH_ESTABLISHED` (−2) og `TH_FIRST_CONTACT` (+1). Kun det stærkeste kontaktsignal tæller, og al tillid (inkl. `TH_NEWSLETTER`) er tilsammen højst −6. `SCORE_VERSION` er uændret.
+
+
+## Scanningdækning og lokal evaluering (2.15)
+
+**Drift → Scanningens dækning** viser 14 kalenderdages hændelser pr. postkasse: scannet, læst før første kontrol, for stor, fejlede forsøg, opgivet scanning og mappeindhold, der ikke kunne bekræftes. En spam-mappeobservation uden body (fx oversize) ændrer ingen afgørelse eller læring. Et fejlet forsøg kan senere lykkes. Genscanninger, udbyderspam og læste mails har forskellige nævnere, så der vises ingen samlet scanningsprocent. Visningen er kun for administratorer og ændrer ingen mail eller træning.
+
+Første normale scanning gemmes i `scan_observations` med score, effektiv grænse, beslutning, filterversion og tidspunkt. Senere AI-vurderinger overskriver ikke observationen. Den nye evaluering måler derfor **første scanning før AI**, ikke kvaliteten af en AI-model eller dens confidence. AI-model og prompt indgår ikke i dette mål; sammenlign kun observationer med samme grundlag og versionsgruppe.
+
+Kør som ejer lokalt i containeren:
+
+```sh
+docker exec spamfilter sfctl quality-export --to /state/quality-sample.jsonl
+docker exec spamfilter sfctl quality-evaluate /state/quality-sample.jsonl
+```
+
+Eksporten indeholder kun scorer, versioner, interne mail-/konto-ID'er og eksplicitte brugerafgørelser, ingen mailtekst, emner eller adresser. ID'er kan stadig identificere personer: filen oprettes som 0600, en eksisterende fil overskrives ikke, og filen skal blive lokalt. Den kræver observationer fra efter opgraderingen. Automatisk Bayes-læring bruges ikke som facit.
+
+Hver linje er et JSON-objekt, eksempel:
+
+```json
+{"account":"mailbox-a","id":"sample-001","split":"holdout","label":"ham","score":2.0,"threshold":8.0,"prediction":"ham","version":"2.15.0"}
+```
+
+`label` er menneskets vurdering (`ham`/`spam`). `prediction` er filterbeslutningen inklusive regler; udelades den ved manuel import, bruges score >= threshold. Brug `split=train` for træningsmateriale og `split=holdout` for særskilt prøvemateriale. Identiske konto/ID-par, også på tværs af split, afvises. `train` tæller ikke med; værktøjet træner aldrig, kontakter ikke IMAP og flytter ingen mail. Maksimal inputfil er 10 MiB.
+
+Resultatet viser TP/TN/FP/FN, precision, recall, falsk-positiv-rate, falsk-negativ-rate og prøvestørrelse pr. postkasse. Manglende nævnere giver `null`. Eksport af brugerrettelser er et **skævt udvalgt prøveudvalg** og ikke dokumentation for samlet træfsikkerhed eller et uafhængigt holdout. For en reel før/efter-måling skal ejeren udtage og menneskeligt mærke et repræsentativt, på forhånd reserveret udvalg, holde det ude af al træning og bruge samme scorergrundlag. Familiepost er ikke testet eller uploadet med denne udgivelse.
+
+### Sammenlign baseline og kandidat (2.16)
+
+Version 2.16 tilføjer en parret sammenligning. Den indgår ikke i
+den oprindeligt publicerede 2.15.0-beta fra commit `108134d`.
+
+```sh
+docker exec spamfilter sfctl quality-compare /state/baseline.jsonl /state/candidate.jsonl
+```
+
+Begge filer følger JSONL-formatet ovenfor. Brug præcis de samme mails og
+menneskelige labels. Kandidatens `score`, `threshold`, `prediction` og `version`
+kommer fra en separat, kontrolleret afprøvning. Kommandoen kører ikke en kandidat
+eller genscanner mails. Angiv `prediction`, når regler indgår i afgørelsen;
+ellers bruges alene scoregrænsen.
+
+Ændrede konto/ID-par, labels, train/holdout-placering, `basis` eller `selection`
+afvises. Træningsrækker tælles ikke med. Rapporten viser før/efter pr. postkasse,
+nye og rettede falske positiver/negativer samt SHA-256 for holdout-udvalget og
+hver sides afgørelser. Rapporten indeholder ingen mail-ID'er, men kontonavne
+kan stadig være personoplysninger. Hold både input og rapport lokalt.
+
+En fanget rigtig mail vægtes som standard til 10 og en overset spam til 1.
+`--false-positive-cost N` ændrer denne prioritering, ikke filterets regler.
+Prisen er en valgt vægt, ikke en målt økonomisk omkostning.
+
+`status` betyder:
+
+- `regression_in_sample`: mindst én ny falsk positiv eller flere falske
+  negativer i en postkasse. Rettelser i andre postkasser skjuler ikke problemet.
+  En ny falsk positiv tæller også, når en anden falsk positiv samtidig rettes.
+- `insufficient_sample`: ingen sådan tilbagegang fundet, men en postkasse
+  mangler mindst 20 ham og 20 spam, eller holdout er tomt.
+- `no_regression_in_sample`: ingen sådan tilbagegang i det leverede udvalg,
+  og alle postkasser opfylder minimum. Nye og rettede falske negativer vises
+  stadig hver for sig, også når det samlede antal er uændret.
+
+`--min-per-class N` ændrer minimum. Grænsen er en praktisk datamængdekontrol,
+**ingen statistisk garanti**. Resultatet beviser hverken repræsentativitet,
+fravær af træningslækage eller en forbedring på fremtidig post. Eksport af
+brugerrettelser beholder sin selektionsbias. Intet aktiveres automatisk.
+CLI-exitkode 0 betyder, at sammenligningen kunne udføres; læs `status` i JSON,
+hvis rapporten bruges i et script.
+
+### Beslutningspolitik (2.16)
+
+`decisionpolicy.py` samler den eksisterende prioritering for første scanning og
+genkontrol før ventende flytninger i en ren funktion uden SQL, netværk eller
+læring. Motoren vælger fortsat den aktuelle kontos afsenderregel og kontrollerer
+mailidentitet og flag omkring kaldet. Resultatet har `policy_version=1` og en
+stabil `reason`, fx `virus`, `sender_block`, `allow_distrusted` eller `score`.
+`decision_traces` gemmer nu forbrugt policy-input og resultat ved første scan,
+ved aktive genscanningsafgørelser og ved genkontrol af almindelige tilladelser
+før flytning. Identiske spor for samme konto/mail/stadie deduplikeres, og
+forældreløse spor slettes med kontoens normale oprydning af mailposter.
+Sporene indeholder scorer, komplette symbolnavne, den valgte afsenderregel,
+autentificeringsdomæner og relevante tidligere brugerafgørelser; ingen body
+eller emne. De er lokale driftsdata og skal beskyttes sammen med databasen.
+
+En lokal, skrivebeskyttet prøve kan bruge de seneste gemte første-scannings-input:
+
+```sh
+docker exec spamfilter sfctl policy-preview mailbox-a --threshold 10 --limit 100
+```
+
+Dette prøver den rene politik med en anden scoregrænse. Ingen indstilling gemmes,
+og der scannes, flyttes eller trænes ingen mail. Trusselsprioritet, sticky
+frigivelser og regelbeslutninger bevares. Uden `--threshold` kontrolleres, om den
+nuværende politik kan reproducere de gemte afgørelser. Resultatet viser
+antal ændrede afgørelser, afgørelsesgrunde, politikversioner og eventuelle ugyldige
+spor. Der udskrives interne spor-ID'er, ikke mail-ID'er eller fulde regelinput.
+
+Prøven bruger **de daværende regler og signaler**. Den er ikke en genscanning,
+en måling mod menneskeligt facit eller en baggrundsprøve på levende trafik.
+De omkringliggende IMAP-/ZAP-værn er fortsat ikke en komplet samlet
+beslutningshistorik. Udskillelsen og sporene ændrer ikke
+beslutningsrækkefølgen, herunder at en allerede eksplicit frigivet mail bevarer
+sin sticky brugerafgørelse.
+
+### Forsinkede AI- og kampagneafgørelser
+
+AI og kampagner bruger også den rene beslutningsgrænse. De har egne profiler,
+så kampagners uafhængige konsensus og lavere scoregulv bevares. AI fastholder
+både den oprindelige og en eventuelt hævet kontogrænse. Adapterne kontrollerer
+fortsat kontotilstand, IMAP-identitet, flag og brugerafgørelser før handlinger.
+
+Nye lokale spor gemmer kun de forbrugte scorer, tal og afledte sikkerhedsfakta;
+ingen mailtekst, emner eller afsenderadresser. Sporene bruger format 2; ældre
+format 1 for scanning kan fortsat gengives. Vælg en fase med:
+
+```sh
+docker exec spamfilter sfctl policy-preview mailbox-a --stage ai_policy
+docker exec spamfilter sfctl policy-preview mailbox-a --stage campaign_context
+docker exec spamfilter sfctl policy-preview mailbox-a --stage campaign_score
+docker exec spamfilter sfctl policy-preview mailbox-a --stage campaign_live
+```
+
+Hver fase er et separat øjebliksbillede, ikke en samlet transaktionshistorik.
+Kaldet er kontoafgrænset og skrivebeskyttet. `--threshold` er kun tilladt for
+`scan`: de forsinkede spor har ikke alle oplysninger til en ærlig prøve med
+en anden grænse. Ingen prøve kontakter IMAP, flytter mail eller ændrer regler.
+
+### Reservér prøvemateriale mod fremtidig læring (2.16)
+
+For en lokal `.eml`, der er udtaget til evaluering, kan ejeren reservere
+indholdet **før** det bruges til træning:
+
+```sh
+docker exec spamfilter sfctl quality-reserve /state/evaluation/sample-001.eml --sample-id sample-001
+```
+
+Registret `quality_holdout` gemmer kun indholdsfingerprint, neutralt sample-ID
+og tidspunkt i den eksisterende database. Mailteksten forbliver i ejerens lokale
+fil. Hold den i en privat mappe og brug 0600 på mail- og facitfiler. Brug neutrale
+sample-ID'er uden navne, adresser eller emner. Samme reservation kan gentages;
+et ID kan ikke genbruges til andet indhold.
+
+Matchende indhold bliver fremover sprunget over ved appens Bayes-læring og
+tilføjelse til lokal fuzzy-genkendelse. Det gælder på tværs af postkasser og
+Bayes-puljer, også ved import uden Message-ID, genopbygning og eksplicitte
+læringshandlinger. Status er `held_out`, på dansk **Reserveret til evaluering –
+ikke trænet**. Det giver ingen læringstæller eller falsk `learned_as`-registrering.
+En allerede eksisterende fuzzy-post kan stadig fjernes ved en frigivelse.
+Almindelig mailbehandling og ejerens handlinger er fortsat aktive; reservationen
+er en afgrænsning af læring, ikke en beskyttelse mod flytning.
+
+Reservation og lærings-POST deler en proceslås. En reservation venter på en
+igangværende lærings-POST; efter reservationen er gemt, kan næste matchende POST
+ikke starte. Et optaget eller utilgængeligt register giver en fejl frem for at
+ignorere beskyttelsen. Hvis databasen er optaget af en skriver, afvises selve
+reservationen uden ændringer; prøv igen senere.
+
+**Det er ingen garanti for et uafhængigt holdout:** Kendt tidligere Bayes-læring
+af samme fingerprint afvises, også fra en anden konto. Fravær af en lokal
+registrering beviser ikke fravær af tidligere læring. Funktionen tilbagefører
+hverken tidligere Bayes/fuzzy-læring eller træning uden for denne app. Fingerprint
+ignorerer kendte transportheadere og linjeskift, men ændrede øvrige headere eller
+indhold kan give et andet fingerprint. Ensartede eller videresendte varianter
+skal derfor udtages samlet og vurderes særskilt.
+
+Gem evalueringslabels i det lokale facitdatasæt. Brugerrettelser i WebUI kan
+stadig ændre brugerafgørelser, kontakter og øvrige tilstande og skal ikke bruges
+som en blind mærkningsproces. Der er endnu ingen automatisk repræsentativ
+udtagning eller fuld kontrol af labels' påvirkning på alle tillidssignaler.
+Databasen skal gendannes sammen med reservationerne ved backup/rollback;
+ældre kode respekterer ikke den nye reservation.
+
+### Versionsgrundlag for AI-vurderinger (2.16)
+
+Nye AI-poster gemmer promptversion, version af faktaudtræk, fingerprint af
+systeminstruktionen, AI-politikversion samt fingerprint og JSON for de faktisk
+anvendte request-indstillinger og pointgrænser. Promptgrundlaget fastholdes,
+når jobbet lægges i kø; request-indstillingerne registreres, når kaldet sendes.
+Tilfældige mail-delimiters normaliseres før promptens fingerprint beregnes.
+Hverken mailindholdet eller Ollamas lokale URL gemmes i disse metadata.
+
+Gamle poster har `null` i de nye felter; deres opsætning kan ikke udledes
+bagefter. Det eksisterende `model`-felt er et **konfigureret modeltag**, som
+kan pege på ændrede vægte hos modelserveren. Metadata er derfor ikke bevis
+for identiske modelvægte eller for, at en model kan reproducere hvert svar.
+
+Sammenlign kun AI-resultater med samme dokumenterede model/prompt/fakta/
+politik- og indstillingsgrundlag og hold postkasserne adskilt. AI'ens confidence
+er fortsat dens eget udsagn. Eksisterende AI-brugerrettelser er et udvalgt
+prøvemateriale; første-scanningsmålet fra `quality-export` ligger fortsat **før
+AI** og må ikke bruges som mål for AI'ens præcision.
+
+Ugyldigt AI-JSON og ugyldige confidence-værdier giver ingen point. De registreres
+nu som fejl med den eksisterende backoff; et ekstremt stort numerisk confidence
+kan heller ikke afbryde fortolkningen. Filtreringen fortsætter efter sin
+almindelige vurdering. Testene bruger en falsk Ollama-server; faktisk modstand
+mod prompt-injektion og forbedring på familiens mail er endnu ikke målt.
+
+### Parallel prøve på én postkasse (2.16)
+
+Ejeren kan registrere en kandidatgrænse parallelt med fremtidige normale
+første-scanninger på en bestemt konto:
+
+```sh
+docker exec spamfilter sfctl policy-trial mailbox-a --threshold 10
+docker exec spamfilter sfctl policy-trial mailbox-a
+docker exec spamfilter sfctl policy-trial mailbox-a --stop
+```
+
+Dette ændrer kun prøvens lokale metadata. Den aktive scoregrænse, regler,
+mailflag, flytninger, læring og beskeder bevares. Kandidaten vurderes på præcis
+de samme score-/regel-/trusselsinput som baseline, før AI. Den får ingen vej til
+at aktivere sin afgørelse. Beskyttede modtagere beholder deres højere grænse;
+virus, eksplicitte blokeringer og verificerede undtagelser følger den fælles politik.
+
+Rapporten viser hvor mange beholdte observationer der ville få samme, en
+strengere eller en lempeligere spamafgørelse, med filter-/politikversionsgrupper.
+Den viser ingen mail-ID'er. Der indgår hverken menneskeligt facit eller en
+beregnet træfsikkerhed. Læste/store/fravalgte mails, genscanning og senere
+AI-/kampagneafgørelser er uden for denne prøve. Der bestilles ingen ekstra
+scanning af gamle mails.
+
+Samme aktive kandidatgrænse kan angives igen uden at nulstille prøven. En ny
+grænse lukker den gamle prøve og starter en ny. Stop bevarer den beholdte
+historik, men optager ikke flere observationer. Observationer følger kontoens
+normale oprydning af mailposter; tællerne er ikke et permanent leveringstal.
+
+Der er ingen automatisk aktivering. En senere afprøvning af en ændret aktiv
+grænse foretages bevidst på den valgte kontos eksisterende indstillingsside.
+De normale grænser og sikkerhedsbremsen for faktiske flytninger gælder fortsat.
+Flere kandidat-afgørelser er ikke i sig selv dokumentation for bedre filtrering;
+brug det lokale, menneskeligt mærkede evalueringsgrundlag før en beslutning.
+
+
+### Samlet driftsblik (2.16)
+
+**Drift → Antivirus og ventende arbejde** viser den seneste lokale
+ClamAV-måling og virusdefinitionernes alder. Målinger ældre end 10 minutter,
+fremtidige tidsstempler og manglende data vises som ukendte. Et bevidst
+`SF_CLAMAV=0` skelnes fra en fejl, der slog antivirus fra. Dette gælder
+all-in-one-containeren; der foretages ingen ekstra netværksprober fra siden.
+
+Antal/alder for planlagte flytninger, aktive træningsjob og fortrydelsesjob
+tæller kun konfigurerede konti. Fjernede kontis gamle rækker tælles ikke med.
+AI-køen viser ventende jobs i denne proces og udelader et job, som allerede
+behandles. Køtal og alder er observationer, ikke automatisk bevis for fejl;
+planlagt ventetid og ejerens pauser kan være tilsigtede. Der sendes ingen nye
+alarmer. Kortet og de eksisterende kontroller er kun for administratorer.
+
+Et forsinket AI-svar bruger den højeste af den oprindelige effektive grænse
+og kontoens aktuelle grænse. En hævning før en ventende ren AI-scoreflytning
+kan også aflyse den. Manuelle spamafgørelser, eksplicitte blokeringer og
+registrerede trusler bevarer deres særregler.
+
+
+### Personlige præferencer og fælles læring (næste udviklingsversion)
+
+Bayes og lokal fuzzy er delte signaler. En eksplicit handling **Lær som spam**
+er derfor træningsdata for den fælles model. Senderregler, kontakt-demotion og
+nyhedsbrevsvalg er derimod knyttet til den konkrete konto. Kampagnekopier læres
+ikke som ekstra spam-eksemplarer; kildens brugerafgørelse kan ellers tælle flere gange.
+
+Et almindeligt, etableret nyhedsbrev, som én person flytter til Spamfilter,
+beholder personens lokale spamafgørelse, men udløser hverken fælles Bayes/fuzzy-
+læring eller en automatisk kampagne på de andre konti. Det kræver den eksisterende
+kombination af List-Unsubscribe, TH_NEWSLETTER, tidligere afsenderhistorik,
+score under kontogrænsen og fravær af registrerede trusler/spamsignaler. En
+DKIM-signatur alene er ikke tilstrækkelig: rigtig spam fra nye signerede domæner
+skal stadig kunne læres og genkendes på tværs af postkasser.
+
+Det er ikke fuldstændigt isolerede Bayes-modeller pr. person. Menneskeligt
+bekræftet træning kan fortsat påvirke det delte signal. Den faktisk målte effekt
+kræver de særskilte evalueringsprøver; ingen familiepost er brugt i kodens prøver.
+AI-prøverne dokumenterer grænserne i appens prompt/protokol og efterbehandling,
+ikke at enhver konkret model modstår enhver prompt-injektion.
+
+## Husk gentagen spam automatisk (2.18)
+
+Efter ejerens godkendelse er `auto_block_repeated_spam` som standard slået til
+pr. postkasse. Kontakten **Husk gentagen spam automatisk** findes under kontoen
+på **Lær af mailprogrammet**. Fra betyder fortsat forslag til administratoren;
+allerede oprettede regler bevares og kan fjernes under Regler eller Tjek disse.
+
+- Tre forskellige mails fra samme **bekræftede præcise adresse**, som brugeren
+  selv markerer via **Flyt til spam** eller flytter til Spamfilter i
+  mailprogrammet, kan oprette en lokal blokregel. Der tælles kun nye rettelser,
+  mens automatikken er slået til, inden for 30 dage. Dubletklik/efterfølgende
+  IMAP-observation tæller ikke igen. Gamle forslag opgraderes ikke automatisk.
+- Der oprettes højst fem nye automatiske blokeringer pr. konto i et rullende
+  døgn. Andre sager forbliver forslag; der køres ingen automatisk baggrunds-
+  oprydning af gamle mails. Reglen gælder fremtidig mail; intet slettes.
+- Kun Filtrér/Markér. Flytninger tæller kun med **Lær af mine flytninger**;
+  den eksplicitte WebUI-handling virker også uden den indstilling. Filterets
+  egne flytninger, udbyderens junkplacering, AI og Bayes-gæt tæller ikke.
+- Egne domæner/platforme, håndlavede tilladelser og eksisterende regler
+  respekteres. Der oprettes ingen domæne-/globalregel. Familiemedlemmers
+  forskellige nyhedsbrevsvalg bliver i den enkelte postkasse.
+- **Frigiv**, **Lær som legitim** eller en observeret flytning tilbage til
+  indbakken nulstiller tællegrundlaget. En uændret automatisk blokering fjernes
+  og forbliver fortrudt; den genskabes ikke automatisk. Håndlavede/ændrede
+  regler bevares. Det gælder også, når automatisk tilladelse er slået fra.
+
+Tabellen `junk_auto_evidence` gemmer lokale konto/adresse/mailnøgler og tid,
+uden mailtekst. Udløbne rækker ryddes ved normale beskedoprydninger og nye
+rettelser. Blokering/fortrydelse vises i hændelser og eksisterende Tjek disse.
+Dette hjælper ved gentagen spam fra samme adresse; skiftende afsendere bliver
+fortsat behandlet af eksisterende scoring, Bayes, fuzzy og kampagneværn.
+
+Når en automatisk regel fortrydes, genvurderes også ventende normale
+scanningsflytninger fra netop den regel. Flytninger, der alene beroede på den,
+aflyses. Selvstændig spam-score, trussel, brugerens spamdom eller en anden
+aktuel regel bevares; allerede flyttede andre mails flyttes ikke tilbage.
+Fortrydelse via **Fjern blokeringen** i Tjek disse bliver også genkontrolleret
+før en ventende flytning. Uafhængig spambegrundelse bevares på samme måde.

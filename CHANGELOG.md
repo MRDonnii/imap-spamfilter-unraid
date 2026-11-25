@@ -1,5 +1,166 @@
 # Ændringslog
 
+## 2.20.0 — 2026-11-25 (beta)
+
+- **Den lokale AI vurderer også fangede mails lige over grænsen:** Før så AI'en kun mails lige under grænsen i
+  indbakken (33 af 668 fangede mails på 30 dage havde en vurdering). Nu får fangede mails op til 3 over grænsen
+  også en vurdering, når afsenderen ikke er kendt, beskyttet eller blokeret. Vurderingen flytter eller frigiver
+  aldrig noget og giver ingen point: Er AI'en sikker på spam eller phishing, vises mailen ikke under Tjek disse;
+  mener den, at mailen er ægte, bliver den på listen med grunden "Den lokale AI mener, at den er ægte". Indbakkens
+  mails går altid først i køen, og vurderingerne tæller ikke med i AI-sidens tal for Prøv/Til.
+- Brugervejledningen forklarer, hvad Tjek disse skjuler, og hvordan man ser det alligevel.
+
+## 2.19.4 — 2026-11-25 (beta)
+
+- **Tjek disse fanger også spam fra ukendte afsendere med gyldig DMARC:** En spammers eget domæne består ofte
+  DMARC. En mail fra en afsender, der aldrig har fået en mail igennem før, vises nu heller ikke, når den har et link
+  på en spamliste, rspamd's phishing-tegn (linktekst og adresse passer ikke sammen), eller når Bayes-filteret, der
+  har lært af jeres egne valg, er næsten sikker (mindst 4 af 5,1). Målt på 90 dage: 16 spammails færre, ingen gode.
+
+## 2.19.3 — 2026-11-25 (beta)
+
+- **Færre spammails under Tjek disse:** Mærket "første mail fra en ukendt afsender" forsvandt, når en mail blev
+  scannet igen, så to ud af tre fangede mails manglede det, og tydelig spam blev stadig vist. Nu spørger listen
+  selv databasen: er der aldrig kommet en mail fra afsenderen igennem til indbakken før, og består den ikke
+  DMARC eller har et faretegn, vises den ikke. Målt på 90 dages rigtig post: 142 spammails færre på listen, og
+  ingen af de 18 mails, som folk frigav, ville være skjult.
+- **Beskyttede adresser:** En mail, der kun står på listen, fordi den gik til en beskyttet adresse, vises ikke, når
+  scoren er mindst 10 over grænsen (fx score 33 med Spamhaus, kendt spamindhold og SPF-fejl). Telefonbeskeden følger
+  de samme regler, og **Vis dem alligevel** viser alt.
+
+## 2.19.2 — 2026-11-25 (beta)
+
+- **Tjek disse viser kun det, der kan være en god mail:** En grænsemail vises ikke længere, når den næsten sikkert
+  er spam: AI'en har kaldt den spam eller phishing med høj sikkerhed, eller det er første mail fra en helt ukendt
+  afsender, som enten ikke består DMARC eller har et faretegn (lokkeemne, snydetegn, nyt domæne, misbrugt
+  topdomæne, falsk brand, kendt spamindhold). Målt på 3 ugers rigtig post: listen ville være faldet fra 69 til 20
+  mails, og alle 10 mails, som folk faktisk frigav, ville stadig være vist (de kom alle fra afsendere, man havde fået
+  mail fra før). En ny afsender med DMARC og uden faretegn (fx en ny webshop) vises som før.
+- Kortet siger, hvor mange der er skjult og hvorfor, med **Vis dem alligevel**. Telefonbeskeden springer dem også over.
+
+## 2.19.1 — 2026-11-25 (beta)
+
+- **Tjek disse viser ikke længere afsendere, du allerede har kaldt spam:** En mail, der kun står under Tjek disse,
+  fordi scoren ligger tæt på grænsen, vises ikke, når en person tidligere har kaldt samme afsender spam ("Det er
+  spam", "Lær som spam" eller en flytning til Junk) og ingen har frigivet mail derfra. Afsenderen er domænet
+  (fx en kampagne med skiftende adresser på samme domæne); for gratis mailadresser kun den præcise adresse. Mails
+  med en rigtig grund til et ekstra kig (kendt kontakt, svar, beskyttet adresse, eget domæne) vises som før.
+  Kortet siger, hvor mange der er skjult, med **Vis dem alligevel**. Mailene ligger stadig i Spamfilter-mappen.
+- **Det er spam rydder op med det samme:** Trykker man Det er spam under Tjek disse, forsvinder de andre mails fra
+  samme afsender også fra listen.
+- **Telefonbeskeden "Nye mails under Tjek disse"** springer de samme mails over.
+
+## 2.19.0 — 2026-11-23 (beta)
+
+- Automatisk metadataopfølgning på seneste eksplicitte spamrettelser i
+  eksisterende Tjek disse og ugerapporten. Første scanningsspor forklarer
+  daværende tilladelse, tidligere frigivelse eller lav score; allerede
+  opdaget spam og manglende spor vises særskilt. Seneste brugerafgørelse
+  gælder, én mail tælles én gang, højst 500 pr. konto og periode.
+  Gemte afsenderbeviser og flere adresser på samme domæne giver forsigtige
+  forklaringer. Ingen automatisk domæneblokering eller ændrede grænser.
+- Krypteret backup angiver nu sit læringsgrundlag i den beskyttede manifest:
+  standardprofilens lokale fuzzy-mønstre ligger i samme Redis-RDB som Bayes.
+  Ukendt profil vises som ukendt; en kendt afvigende fuzzy-backend giver
+  ufuldstændig backupstatus og bevarer seneste vellykkede backup/retention.
+- CI indlærer et neutralt lokalt fuzzy-mønster i en frisk, kontoløs AIO med
+  netværket afbrudt. Krypteret backup gendannes i en anden isoleret AIO;
+  mønstret skal genkendes uden genindlæring. Egne maildata anvendes ikke.
+
+## 2.18.0 — 2026-11-23 (beta)
+
+- Ejerbestilt personlig spamautomatik: Tre nye rettelser af forskellige mails
+  fra samme bekræftede adresse inden for 30 dage kan blokere adressen for den
+  enkelte postkasse. Mailprogram og WebUI tælles samlet uden dubletklik.
+  Gamle forslag udløser ingen blokering ved opgradering. Højst fem nye regler
+  pr. konto pr. rullende døgn. Egne domæner og eksisterende tilladelser bevares.
+- **Husk gentagen spam automatisk** er som standard slået til og kan slås fra
+  pr. konto. Fra giver fortsat forslag; eksisterende regler bevares. Ingen
+  ændring af scoregrænser, ingen automatisk domæne-/globalregel eller sletning.
+- Frigivelse/legitim-afgørelse nulstiller tællegrundlaget og fortryder en
+  uændret automatisk blokering, også uden automatisk tilladelse. Håndlavede
+  regler bevares; en fortrudt automatisk blokering genskabes ikke af sig selv.
+- Fortrydelse genvurderer også regelafhængige ventende flytninger. Kun
+  afgørelser, der alene skyldtes den fjernede automatiske regel, aflyses;
+  selvstændig spam/trussel/brugerafgørelse/aktuel regel bevares.
+
+## 2.17.0 — 2026-11-23 (beta)
+
+- Forsinkede AI- og kampagneafgørelser bruger særskilte profiler i den fælles
+  rene beslutningsmotor med lokale, kontoafgrænsede input/resultat-spor.
+  `sfctl policy-preview --stage` gengiver de enkelte faser skrivebeskyttet.
+  Eksisterende prioritering, kampagnekonsensus og scoregulve bevares.
+- Kampagner genkontrollerer brugerafgørelser, tilladelser, scoregulv og
+  stoptilstand efter langsomme IMAP-kald. En frigivelse eller aflysning under
+  kontrollen må ikke overskrives med en flytning eller spammarkering.
+
+- Et personligt valg om at flytte et legitimt, etableret nyhedsbrev til spam
+  starter ikke længere kampagneafgørelser på andre postkasser. Den eksisterende
+  beskyttelse mod Bayes/fuzzy-læring af sådanne valg bevares.
+- Syntetiske AI-prøver omfatter falske systemroller, instruktioner og delimiters
+  i maildata samt ugyldige/dybt indlejrede svar. Parseren håndterer også
+  decoderens rekursionsfejl som ugyldigt svar med normal backoff.
+
+## 2.16.0 — 2026-11-23 (beta)
+
+- Drift samler antivirusstatus/signaturalder og antal/alder for ventende
+  flytninger, træning, fortrydelse og AI. Gamle/manglende helbredsmålinger
+  vises som ukendte. Ventetid er ikke i sig selv en fejl; ingen nye alarmer
+  eller mailhandlinger. Visningen er kun for administratorer.
+
+- Forsinkede AI-svar respekterer en hævet postkassegrænse. En ren AI-
+  scoreflytning aflyses også, hvis grænsen hæves i ventetiden. Oprindelige
+  højere grænser bevares; manuelle spamafgørelser og trusler ændres ikke.
+
+- Ny separat AIO-gendannelsesprøve fra krypteret backup. Kontrollerer app,
+  Rspamd, Redis og Unbound på en kontoløs kopi uden netværk/porte og med
+  containerbudgetter. Verificerer mounts/isolation før start og faktisk RDB-
+  indlæsning med en neutral markør. ClamAV og udbyderlogin er undtaget.
+
+- Familiens »Hvorfor?« bruger den registrerede blokering fra afgørelsen og
+  omskriver ikke gamle mails med nye regler. Manglende forklaring udlægges ikke
+  som en udokumenteret scoreoverskridelse. Reserveret prøvemateriale får en
+  forståelig hændelsestekst uden at ændre knapper eller adgangsregler.
+- Gendannelsesprøvens app-/Redis-underprocesser får grænser for virtuel
+  hukommelse, CPU, åbne filer og core dumps. `backup-drill --memory-mib` vælger
+  128–4096 MiB pr. underproces; standard er 1024. Dette er stadig app/Redis-
+  prøven, ikke en separat gendannet hel-stak-container.
+- `sfctl policy-trial` kan registrere en kandidatgrænse parallelt på én postkasse
+  uden mailhandlinger eller aktivering. Bevarer beskyttede modtageres grænse,
+  rapporterer logiske forskelle og adskiller resultater ved skift af kandidat.
+- AI-poster får versionsgrundlag for prompt/fakta/politik og faktisk request-
+  konfiguration uden mailindhold eller lokal URL. Gamle poster forbliver ukendte;
+  modeltag er ikke et verificeret fingerprint af modelvægtene.
+- Ugyldigt AI-JSON tælles som fejl med backoff. Ekstremt store confidence-tal
+  afvises uden at afbryde fortolkningen. AI-point og aktive regler er uændrede.
+- Lokale, kontobundne beslutningsspor gemmer den rene politiks input/resultat
+  uden mailtekst. `sfctl policy-preview` kan reproducere dem og afprøve en
+  anden scoregrænse uden mailhandlinger eller konfigurationsændringer.
+  Prøven bruger de gemte regler og signaler og er ikke en ny scanning.
+- `sfctl quality-reserve` reserverer en lokal mailfil mod fremtidig Bayes- og
+  fuzzy-læring gennem appen, også på tværs af konti og import uden Message-ID.
+  Kun fingerprint/ID/tid gemmes. Kendt tidligere læring afvises; historisk
+  træningsfrihed kan ikke bevises, og ældre kode respekterer ikke reservationen.
+- `sfctl quality-compare` sammenligner baseline og kandidat på samme lokale,
+  menneskeligt mærkede udvalg. Viser nye/rettede fejl og valgt fejlomkostning
+  pr. postkasse; afviser ændrede labels og udvalg. Rapporten gælder kun prøven
+  og aktiverer ingen ændringer.
+- Den fælles første-scannings-/flyttepolitik er udskilt i `decisionpolicy.py`
+  med politikversion og stabile afgørelsesgrunde. Den eksisterende prioritering
+  og motorens indgange er bevaret. Dette er første del af udskillelsen.
+- Udbygningen udgives i et nyt signeret 2.16.0-kildearkiv. Den tidligere
+  2.15.0-release og dens artifacts bevares uændret.
+
+## 2.15.0 — 2026-11-23 (beta)
+
+- Mappeobservationer uden hentbart indhold ændrer ingen eksisterende afgørelser og udløser ingen læring, heller ikke ved genbrugte ID'er. De tælles særskilt under Drift.
+- Mails uden Message-ID scannes, og genbrugte ID'er med andet indhold får en selvstændig vurdering. Additive, kontobundne indholdsfingerprints beskytter frigivelse, læring, opslag og egne notifikationer uden at ændre mailens headere.
+- Almindelige tilladelser genkontrolleres før en ventende flytning med komplette beslutningssymboler. Virus og forfalskningskontrol bevares. En hævet kontogrænse aflyser ventende rene scorebeslutninger.
+- Drift viser 14 dages scanningstællere pr. postkasse. Nye lokale `quality-export`/`quality-evaluate` giver versionsmærket første-scanning-evaluering af menneskeligt mærkede prøveudvalg uden træning eller mailadgang.
+- `backup-drill` starter app og Redis/Bayes på en privat gendannet kopi uden mailarbejdere. Månedlig off-site-kontrol og container-smokeprøven omfatter nu denne opstart.
+- Mailidentitet, evalueringsregnestykke og gendannelsesprøve er udskilt i små moduler. Dokumentationen beskriver IMAP-efterbehandling, dækningsgrænser, stikprøvebias og rollbackens sikkerhedskonsekvenser.
+
+
 ## 2.14.2
 
 - **Vedligeholdelse:** Test af opdatering efter flytning af repo. Ingen ændring i, hvordan filteret virker.

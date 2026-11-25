@@ -373,7 +373,8 @@ def test_release_allow_dialog_refused_for_threats_and_foreign_mail(env, admin):
 
 def test_review_rows_offer_tillad_with_the_dialog(env, admin):
     insert_message(env.conn, "bynet", "<near@x>", our_action="moved_to_junk", our_score=8.4,
-                   current_folder="Spamfilter", sender="Lars <lars@nielsen-vvs.example>", subject="Tilbud på fyr")
+                   current_folder="Spamfilter", sender="Lars <lars@nielsen-vvs.example>", subject="Tilbud på fyr",
+                   symbols=[{"n": "DMARC_POLICY_ALLOW", "s": -0.5}])   # 2.19.3: a real, new sender
     env.conn.commit()
     html = admin.get("/spam").get_data(as_text=True)
     if 'id="tjek"' not in html:

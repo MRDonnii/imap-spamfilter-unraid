@@ -725,3 +725,194 @@ def test_protected_mail_is_never_applied():
     msg = {"user_verdict": None, "our_action": "none", "threat": None, "current_folder": "INBOX",
            "symbols": '[{"n": "TH_PROTECTED_RCPT", "s": 0}, {"n": "TH_LURE_SUBJECT", "s": 1.5}]'}
     assert ai._block_reason(None, None, msg, {"folder": "INBOX"}) == "contact"
+
+
+def test_overflow_confidence_is_invalid_instead_of_crashing():
+    result = ai.parse_reply({'verdict': 'spam', 'confidence': 10 ** 1000, 'reason': 'neutral'})
+    assert result == ('unsure', 0.0, 'neutral', False)
+
+
+def test_invalid_reply_counts_as_error_without_adding_points(eng, monkeypatch, ollama):
+    ollama.reply = 'not JSON'
+    h = harness(eng, monkeypatch, mode='on')
+    h.deliver('invalid@sample.example', score=6)
+    h.scan()
+    rows, wakes = drain(h)
+    assert rows[0]['status'] == 'error'
+    assert rows[0]['error'] == 'ugyldigt svar' and rows[0]['points'] == 0
+    assert not wakes and apply(h) == 0
+    assert h.row('invalid@sample.example')['our_action'] == 'none'
+    assert ai.health(h.db.conn)['errors'] == 1
+
+
+def test_prompt_identity_ignores_mail_content_and_nonce_but_tracks_extraction_version(monkeypatch):
+    a = ai.build_messages(ai.MailFacts(subject='PRIVATE SUBJECT A', text='PRIVATE BODY A'), nonce='a1')
+    b = ai.build_messages(ai.MailFacts(subject='PRIVATE SUBJECT B', text='PRIVATE BODY B'), nonce='b2')
+    first = ai.prompt_identity(a)
+    assert first == ai.prompt_identity(b)
+    assert len(first['prompt_sha256']) == 64
+    assert 'PRIVATE' not in json.dumps(first)
+    monkeypatch.setattr(ai, 'FACTS_VERSION', ai.FACTS_VERSION + 1)
+    assert ai.prompt_identity(a)['prompt_sha256'] != first['prompt_sha256']
+    assert ai.prompt_identity([{'role': 'user', 'content': 'no known system prompt'}]) == {}
+
+
+def test_request_identity_keeps_controls_but_never_mail_or_lan_address():
+    settings = ai.normalize_settings(dict(url=URL, model='example:1'))
+    body = ai.chat_body(settings, [{'role': 'user', 'content': 'PRIVATE BODY'}])
+    meta = ai.settings_identity(settings, body)
+    assert 'PRIVATE' not in meta['settings_json'] and URL not in meta['settings_json']
+    assert json.loads(meta['settings_json'])['generation_options']['num_ctx'] == ai.NUM_CTX
+    changed = ai.chat_body(dict(settings, model='example:2'), body['messages'])
+    assert ai.settings_identity(dict(settings, model='example:2'), changed)['settings_sha256'] != meta['settings_sha256']
+    assert ai.settings_identity(dict(settings, url='http://192.168.1.20:11434'), body) == meta
+
+
+def test_queued_prompt_provenance_and_actual_request_controls_are_preserved(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode='shadow')
+    h.deliver('versioned@sample.example', score=6)
+    h.scan()
+    queued_prompt_version = ai.PROMPT_VERSION
+    monkeypatch.setattr(ai, 'PROMPT_VERSION', queued_prompt_version + 1)
+    monkeypatch.setattr(ai, 'NUM_CTX', 8192)
+    rows, _ = drain(h)
+    assert rows[0]['prompt_version'] == queued_prompt_version
+    assert len(rows[0]['prompt_sha256']) == len(rows[0]['settings_sha256']) == 64
+    assert json.loads(rows[0]['settings_json'])['generation_options']['num_ctx'] == 8192
+    stored = h.db.conn.execute('SELECT * FROM ai_verdicts').fetchone()
+    assert stored['prompt_sha256'] == rows[0]['prompt_sha256']
+    assert stored['settings_json'] == rows[0]['settings_json']
+    item = ai.evaluation(h.db.conn, now=h.t)['items'][0]
+    assert item['prompt_version'] == queued_prompt_version
+    assert item['settings_sha256'] == stored['settings_sha256']
+
+
+def test_legacy_ai_metadata_is_unknown_and_migration_is_idempotent():
+    import sqlite3
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("CREATE TABLE ai_verdicts(id INTEGER PRIMARY KEY, account TEXT NOT NULL, "
+                     "message_id TEXT NOT NULL, mode TEXT NOT NULL, status TEXT NOT NULL, applied TEXT, created_at INTEGER NOT NULL)")
+        conn.execute("INSERT INTO ai_verdicts(account,message_id,mode,status,created_at) VALUES('a','legacy','shadow','ok',1)")
+        ai.ensure_schema(conn)
+        ai.ensure_schema(conn)
+        row = conn.execute('SELECT * FROM ai_verdicts').fetchone()
+        assert all(row[name] is None for name in ai.META_COLUMNS)
+    finally:
+        conn.close()
+
+
+def test_raised_account_threshold_before_ai_apply_is_respected(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode='on')
+    h.deliver('raised-before-ai@example.test', score=6.0)
+    h.scan()
+    drain(h)
+    h.acc.threshold = 12.0
+    assert apply(h) == 1
+    row = h.row('raised-before-ai@example.test')
+    assert row['our_score'] == 9.0
+    assert row['our_action'] == 'none'
+    assert not pending(h)
+
+
+def test_raised_account_threshold_after_ai_apply_cancels_pending_move(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode='on')
+    h.deliver('raised-after-ai@example.test', score=6.0)
+    h.scan()
+    drain(h)
+    apply(h)
+    assert pending(h)
+    h.acc.threshold = 12.0
+    h.advance(61)
+    h.moves()
+    assert not pending(h)
+    assert h.row('raised-after-ai@example.test')['our_action'] == 'none'
+    assert not h.client.folders[h.acc.folder_map['junk']].msgs
+
+
+def test_old_ai_job_does_not_lower_its_original_threshold(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode='on')
+    h.deliver('lowered-after-scan@example.test', score=4.0)
+    h.scan()
+    drain(h)
+    h.acc.threshold = 6.0
+    assert apply(h) == 1
+    assert h.row('lowered-after-scan@example.test')['our_score'] == 7.0
+    assert h.row('lowered-after-scan@example.test')['our_action'] == 'none'
+    assert not pending(h)
+
+
+def test_raised_threshold_preserves_explicit_user_spam_move(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode='on')
+    h.deliver('user-spam-after-ai@example.test', score=6.0)
+    h.scan()
+    drain(h)
+    apply(h)
+    assert pending(h)
+    h.acc.threshold = 12.0
+    h.db.update_message('user-spam-after-ai@example.test', user_verdict='spam')
+    h.advance(61)
+    h.moves()
+    assert h.row('user-spam-after-ai@example.test')['our_action'] == 'moved_to_junk'
+
+
+def test_ai_policy_trace_replays_actual_application_without_mail_content(eng, monkeypatch, ollama):
+    import decisiontrace
+    h = harness(eng, monkeypatch)
+    h.deliver('trace-delayed@example.test', score=6.0, body='PRIVATE TRACE BODY')
+    h.scan()
+    drain(h)
+    apply(h)
+    row = h.db.conn.execute("SELECT snapshot FROM decision_traces WHERE account=? AND stage='ai_policy'",
+                            (h.acc.name,)).fetchone()
+    assert row and 'PRIVATE TRACE BODY' not in row[0]
+    result = decisiontrace.replay(row[0])
+    assert result['action'] == 'pending_move' and result['reason'] == 'ai_score'
+
+
+# ----- 2.20: caught mail just over the line - only sorts 'Tjek disse' --------
+
+
+@pytest.mark.parametrize("kw,action,ok", [
+    ({"spam": True, "final": 9.0}, "pending_move", True),
+    ({"spam": True, "final": 8.0}, "moved_to_junk", True),
+    ({"spam": True, "final": 10.99}, "flagged", True),
+    ({"spam": True, "final": 11.0}, "pending_move", False),          # far over: obvious
+    ({"spam": True, "final": 9.0}, "none", False),
+    ({"spam": True, "final": 9.0, "rule_hit": "block:2"}, "pending_move", False),
+    ({"spam": True, "final": 9.0, "threat": "phish"}, "pending_move", False),
+    ({"spam": True, "final": 9.0, "names": {"TH_KNOWN_CONTACT"}}, "pending_move", False),
+    ({"spam": True, "final": 9.0, "names": {"TH_PROTECTED_RCPT"}}, "pending_move", False),
+    ({"spam": True, "final": 9.0, "aged": True}, "pending_move", False),
+])
+def test_review_candidates(kw, action, ok):
+    s = ai.normalize_settings({"mode": "on", "url": URL})
+    assert ai.review_candidate(_sc(**kw), our_action=action, flags=(), prior=None, settings=s) is ok
+    off = ai.normalize_settings({"mode": "off", "url": URL})
+    assert ai.review_candidate(_sc(**kw), our_action=action, flags=(), prior=None, settings=off) is False
+
+
+def test_caught_mail_just_over_is_judged_but_never_changed(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode="on")
+    h.deliver("near@x", score=9.0)
+    h.scan()
+    before = h.row("near@x")
+    moves = len(pending(h))
+    assert before["our_action"] == "pending_move" and ai.queue_size() == 1
+    h.advance(300)                                   # after the grace: still judged (not a move)
+    rows, wakes = drain(h)
+    assert rows[0]["applied"] == "review" and rows[0]["verdict"] == "spam" and wakes == []
+    assert apply(h) == 0
+    after = h.row("near@x")
+    assert after["our_score"] == before["our_score"] and "TH_AI_SPAM" not in (after["symbols"] or "")
+    assert len(pending(h)) == moves
+    assert ai.evaluation(h.db.conn, now=h.t)["summary"]["total"] == 0     # not in the Til/Prøv numbers
+
+
+def test_review_jobs_wait_for_inbox_mail(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode="on")
+    for i in range(ai.REVIEW_QUEUE_MAX + 2):
+        h.deliver(f"near{i}@x", score=9.0)
+    h.scan()
+    assert ai.queue_size() == ai.REVIEW_QUEUE_MAX + 1

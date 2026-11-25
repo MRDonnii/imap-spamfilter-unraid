@@ -157,9 +157,12 @@ EVENT_LABELS: dict[str, tuple[str, str]] = {
     "rule_auto_allow_skipped": ("Ikke tilladt automatisk (Altid igennem gælder)", "neutral"),
     # 2.12 (#8/#9) rules versus the user's moves to Junk; newsletters not learned as spam
     "junk_rule_conflict": ("Flyttet til Junk trods en tilladelse (Tjek disse)", "warn"),
-    "junk_auto_block": ("Afsender blokeret for kontoen (3 flytninger til Junk)", "warn"),
+    "junk_auto_block": ("Afsender blokeret for kontoen efter gentagen spam", "warn"),
+    "junk_auto_block_removed": ("Automatisk spamblokering fjernet efter brugerens rettelse", "ok"),
+    "move_skipped_auto_block": ("Flytning aflyst efter fortrudt automatisk spamblokering", "neutral"),
     "junk_block_suggested": ("Forslag: bloker afsenderen for kontoen", "info"),
     "learn_skip_newsletter": ("Ikke lært som spam – almindeligt nyhedsbrev", "neutral"),
+    "campaign_local_preference": ("Personligt nyhedsbrevsvalg – andre konti er uberørte", "neutral"),
     # 2.2
     "own_domain_uribl": ("Eget domæne på en domæneliste", "warn"),
     "ham_guard": ("Ikke lært som legitim (læringsvagt)", "warn"),
@@ -1766,7 +1769,20 @@ def _learning_card(acc: Any) -> str:
              + f'<span class="field-hint">{h(hint)}</span></div>'
              + ('<p class="faint small">Gælder ikke i Overvåg – her flytter filteret ingenting.</p>' if shadow else "")
              + f'<div class="form-actions">{kit.button("Gem", kind="secondary", icon="check")}</div>')
-    return kit.card(kit.post_form(f"/accounts/{_q(acc.name)}/auto-allow", inner), title="Lær af mailprogrammet",
+    block = (kit.hidden("next", request.path)
+             + '<div class="field field-switch">'
+             + kit.switch("auto_block_repeated_spam", bool(_attr(acc, "auto_block_repeated_spam", True)),
+                          "Husk gentagen spam automatisk")
+             + '<span class="field-hint">Tre nye spamrettelser af forskellige mails fra samme bekræftede adresse '
+               'inden for 30 dage blokerer kun adressen i denne postkasse. Gælder både Flyt til spam og '
+               'flytninger i mailprogrammet. Gamle rettelser tæller ikke med ved opgraderingen. '
+               'Højst fem nye automatiske blokeringer pr. døgn. Frigiver du en mail, fjernes en sådan '
+               'automatisk blokering igen. Egne domæner og eksisterende tilladelser beskyttes. '
+               'Slår du fra, bevares eksisterende regler; fjern dem under Regler eller Tjek disse.</span></div>'
+             + f'<div class="form-actions">{kit.button("Gem spamautomatik", kind="secondary", icon="check")}</div>')
+    forms = (kit.post_form(f"/accounts/{_q(acc.name)}/auto-allow", inner)
+             + kit.post_form(f"/accounts/{_q(acc.name)}/auto-block", block))
+    return kit.card(forms, title="Lær af mailprogrammet",
                     subtitle="Det, du gør på telefonen eller computeren, lærer filteret af.", cls="learn-card")
 
 
@@ -2081,6 +2097,28 @@ def account_auto_allow(name: str):
         return ui.respond(err, ok=False, next_url=back)
     return ui.respond("Afsendere tillades nu automatisk, når en mail flyttes ud af Spamfilter." if on
                       else "Afsendere tillades ikke længere automatisk.", next_url=back, reload=True)
+
+
+@app.post("/accounts/<name>/auto-block")
+@ui.admin_required
+def account_auto_block(name: str):
+    acc = _acc_or_404(name)
+    back = _back(name)
+    on = _flag("auto_block_repeated_spam")
+    if bool(_attr(acc, "auto_block_repeated_spam", True)) == on:
+        return ui.respond("Uændret.", next_url=back)
+    if locked := _config_locked():
+        return ui.respond(locked, ok=False, next_url=back)
+
+    def mutate(raw: dict) -> None:
+        _entry(raw, name)["auto_block_repeated_spam"] = on
+
+    err = _write_config(mutate, "account_auto_block", account=name, detail=f"on={int(on)}")
+    if err:
+        return ui.respond(err, ok=False, next_url=back)
+    text = ("Gentagen bekræftet spam huskes nu automatisk for postkassen." if on else
+            "Nye automatiske spamblokeringer er slået fra. Eksisterende regler er bevaret.")
+    return ui.respond(text, next_url=back, reload=True)
 
 
 # ---- 2.3 follow-up: Straks-advarsel ved farlige mails (config key threat_notice) ---------
@@ -2939,9 +2977,11 @@ REPAIR_MAX_PICKS = 2000              # services.LEARN_LIST_MAX_ITEMS
 TARGET_RATIO = 0.5                   # spam:ham >= 1:2 (services.REBALANCE_DEFAULT_RATIO)
 LL_HEADERS = [("Liste", ""), ("Status", ""), ("Fremskridt", "job-prog-col"), ("Resultat", ""), ("", "end")]
 LL_ITEM_FILTERS = (("", "Alle"), ("learned", "Lært"), ("already", "Var lært"), ("not_found", "Ikke fundet"),
+                   ("held_out", "Reserveret til evaluering"),
                    ("deferred", "Udskudt"), ("failed", "Fejlede"), ("pending", "Venter"))
 LL_ITEM_TONES = {"learned": "ok", "already": "neutral", "pending": "neutral", "not_found": "warn",
-                 "ambiguous": "warn", "too_large": "warn", "deferred": "warn", "declined": "bad", "failed": "bad"}
+                 "ambiguous": "warn", "too_large": "warn", "deferred": "warn", "declined": "bad", "failed": "bad",
+                 "held_out": "neutral"}
 
 
 def _ratio_or_none(value: Any) -> float | None:
@@ -3963,7 +4003,7 @@ def _bytes(n: Any) -> str:
 
 def _iso_ts(value: Any) -> int | None:
     """Docker's RFC 3339 StartedAt (nanoseconds, Z) -> unix seconds."""
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)?", str(value or ""))
     if not m:
@@ -4055,6 +4095,52 @@ def _backup_card(hs: dict) -> str:
         pairs.append(("Fejl", f'<span class="tone-bad">{h(str(b["error"])[:200])}</span>'))
     extra = kit.alert("Backuppen er over 26 timer gammel. Tjek User Scripts → Spamfilter-backup.", "warn") if old else ""
     return kit.card(kit.kv_list(pairs) + extra, title="Backup", subtitle="Kører hver nat kl. 03:00.")
+
+
+def _work_health_card() -> str:
+    """Cached antivirus facts and queue metadata; never run network probes."""
+    import opsview
+    import ai_verdict
+    import aio_health
+
+    now = time.time()
+    facts = opsview.antivirus(aio_health.read_status(), now=now)
+    state = facts['state']
+    text, tone = {
+        'unknown': ('Ukendt – ingen frisk måling', 'warn'),
+        'ok': ('Virker', 'ok'), 'waiting': ('Venter på virusdefinitioner', 'warn'),
+        'down': ('Svarer ikke – mail scannes uden virustjek', 'bad'),
+        'stale': ('Virusdefinitionerne er for gamle', 'bad'),
+        'off': ('Slået fra i opsætningen' if facts.get('intentionally_off') else 'Slået fra ved en fejl',
+                'neutral' if facts.get('intentionally_off') else 'bad'),
+    }[state]
+    pairs = [('Antivirus', kit.badge(text, tone))]
+    pairs.append(('Virusdefinitionernes alder', h(_age_text(facts['signatures_age_s']))
+                  if facts.get('signatures_age_s') is not None else 'Ukendt'))
+    if facts.get('observed_age_s') is not None:
+        pairs.append(('Antivirus målt', h(_age_text(facts['observed_age_s'])) + ' siden'))
+    queues = opsview.queues(ui.db(), [a.name for a in ui.effective_accounts()], now=now)
+    for kind, label in (('moves', 'Planlagte flytninger'), ('training', 'Træningsjob'), ('undo', 'Fortrydelsesjob')):
+        row = queues[kind]
+        if not row['available']:
+            value = 'Ukendt'
+        elif not row['count']:
+            value = 'Ingen ventende'
+        else:
+            value = f"{row['count']} ventende · ældste " + (
+                _age_text(row['oldest_age_s']) if row['oldest_age_s'] is not None else 'ukendt alder')
+        pairs.append((label, h(value)))
+    ai = ai_verdict.queue_status(now=now)
+    age = _age_text(ai['oldest_age_s']) if ai['oldest_age_s'] is not None else 'ukendt alder'
+    pairs.append(('AI-kø', h(f"{ai['count']} ventende · ældste {age}" if ai['count'] else 'Ingen ventende')))
+    links = (kit.button('Postkasser', href='/accounts', kind='ghost', size='sm')
+             + kit.button('AI-status', href='/ai', kind='ghost', size='sm')
+             + kit.button('Træning', href='/training', kind='ghost', size='sm'))
+    return kit.card(kit.kv_list(pairs)
+                    + '<p class="faint small">Ventetid kan være planlagt eller skyldes en pause. '
+                      'Køtal er ikke fejlmeldinger. AI-køen viser kun job, der endnu ikke behandles.</p>'
+                    + '<div class="form-actions">' + links + '</div>',
+                    title='Antivirus og ventende arbejde', subtitle='Seneste måling og aktuelt øjebliksbillede.')
 
 
 def _crypt_backup_card() -> str:
@@ -4268,6 +4354,27 @@ def _audit_detail(r: dict) -> str:
     return d.replace("->", " → ") if arrow else d
 
 
+def _scan_coverage_card():
+    from datetime import datetime, timedelta
+    import quality
+    since = (datetime.now(kit.TZ) - timedelta(days=13)).strftime("%Y-%m-%d")
+    accounts = [a.name for a in ui.visible_accounts()]
+    items = quality.coverage(ui.db(), accounts, since)
+    rows = ""
+    for item in items:
+        cells = [h(ui.account_label(item["account"]))]
+        cells += [h(str(item["counts"][m]) if item['has_observations'] else 'Intet datagrundlag')
+                  for m in quality.METRICS]
+        rows += "<tr>" + "".join("<td>" + str(c) + "</td>" for c in cells) + "</tr>"
+    heads = ["Postkasse", *quality.METRICS.values()]
+    table = ('<div class="table-wrap"><table><thead><tr>' +
+             "".join("<th>" + str(h(x)) + "</th>" for x in heads) +
+             "</tr></thead><tbody>" + rows + "</tbody></table></div>")
+    return kit.card(table if rows else '<p class="muted">Intet datagrundlag endnu.</p>',
+                    title="Scanningens dækning – 14 dage",
+                    subtitle="Hændelser pr. postkasse. Fejlede forsøg kan senere lykkes; tallene er ikke en procent af al modtaget post.")
+
+
 @app.get("/system")
 @ui.admin_required
 def system_page():
@@ -4329,9 +4436,10 @@ def system_page():
         + _containers_card(hs) + rspamd_card
         + _dns_card(hs) + _backup_card(hs)
         + _crypt_backup_card()
-        + _disk_card(hs) + _mail_drift_card()
+        + _disk_card(hs) + _mail_drift_card() + _work_health_card()
         + kit.card(version, title="Version")
         + "</div>"
+        + _scan_coverage_card()
         + log_card)
     return _page("Drift", body, active="system", actions_html=restart,
                  subtitle="Containere, rspamd, DNS, backup og logs.")

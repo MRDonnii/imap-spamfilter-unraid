@@ -53,10 +53,13 @@ from __future__ import annotations
 import email
 import email.header
 import email.policy
+import decisionpolicy
 import html as _html
+import hashlib
 import ipaddress
 import json
 import logging
+import math
 import queue
 import re
 import secrets
@@ -105,6 +108,13 @@ RAW_MAX = 1024 * 1024
 REPLY_MAX = 64 * 1024             # bytes of an Ollama answer we read
 KEEP_ALIVE = "10m"
 NUM_CTX = 4096
+# Bump when instruction semantics, fact extraction or point policy changes.
+PROMPT_VERSION = 1
+FACTS_VERSION = 1
+AI_POLICY_VERSION = 1
+META_COLUMNS = {'prompt_version': 'INTEGER', 'facts_version': 'INTEGER',
+                'prompt_sha256': 'TEXT', 'ai_policy_version': 'INTEGER',
+                'settings_sha256': 'TEXT', 'settings_json': 'TEXT'}
 
 QUEUE_MAX = 50
 SHADOW_MAX_AGE_S = 10 * 60        # Prøv: a job waiting longer is dropped
@@ -163,7 +173,13 @@ CREATE TABLE IF NOT EXISTS ai_verdicts (
     applied_at   INTEGER,
     queued_at    INTEGER,
     deadline     INTEGER,
-    created_at   INTEGER NOT NULL
+    created_at   INTEGER NOT NULL,
+    prompt_version INTEGER,
+    facts_version INTEGER,
+    prompt_sha256 TEXT,
+    ai_policy_version INTEGER,
+    settings_sha256 TEXT,
+    settings_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ai_verdicts_time ON ai_verdicts(created_at);
 CREATE INDEX IF NOT EXISTS idx_ai_verdicts_apply ON ai_verdicts(account, applied);
@@ -173,6 +189,16 @@ CREATE INDEX IF NOT EXISTS idx_ai_verdicts_msg ON ai_verdicts(account, message_i
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # Nullable on purpose: legacy verdicts have unknown provenance.
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(ai_verdicts)")}
+    for name, sql_type in META_COLUMNS.items():
+        if name not in columns:
+            try:
+                conn.execute(f"ALTER TABLE ai_verdicts ADD COLUMN {name} {sql_type}")
+            except sqlite3.OperationalError:
+                # Another startup process may have completed the same migration.
+                if name not in {r[1] for r in conn.execute("PRAGMA table_info(ai_verdicts)")}:
+                    raise
 
 
 # ---------------------------------------------------------------------------
@@ -696,6 +722,42 @@ def chat_body(settings: dict[str, Any], messages: list[dict[str, str]]) -> dict[
             "keep_alive": KEEP_ALIVE, "options": {"temperature": 0, "num_ctx": NUM_CTX}}
 
 
+def prompt_identity(messages: list) -> dict[str, Any]:
+    """Fingerprint instruction template and extraction version, never mail data.
+
+    Random delimiters differ per request. Canonicalize them in the trusted
+    SYSTEM message only; sender-controlled user content is never hashed here.
+    """
+    system = next((m.get("content") for m in messages
+                   if isinstance(m, dict) and m.get("role") == "system"), None)
+    if not isinstance(system, str):
+        return {}
+    canonical = re.sub(r"<<<(MAIL|END)-[^>\r\n]+>>>", r"<<<\1-{nonce}>>>", system)
+    payload = dict(prompt_version=PROMPT_VERSION, facts_version=FACTS_VERSION, system=canonical,
+                   limits=[TEXT_MAX, LINKS_MAX, ATTACH_MAX, SYMBOLS_MAX, FIELD_MAX, RAW_MAX])
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                                      ensure_ascii=True).encode()).hexdigest()
+    return dict(prompt_version=PROMPT_VERSION, facts_version=FACTS_VERSION, prompt_sha256=digest)
+
+
+def settings_identity(settings: dict, body: dict) -> dict[str, Any]:
+    """Identify actual request controls without mail text or the LAN URL.
+
+    A configured model tag is mutable; this does NOT verify model weights.
+    """
+    payload = dict(policy_version=AI_POLICY_VERSION,
+                   settings={k: settings.get(k) for k in ("mode", "model", "band_low", "band_high",
+                                                         "suspect", "suspect_low", "max_per_hour", "timeout")},
+                   generation={k: body.get(k) for k in ("model", "format", "stream", "keep_alive")},
+                   generation_options={k: (body.get("options") or {}).get(k) for k in ("temperature", "num_ctx")},
+                   points=dict(confidence_strong=CONF_STRONG, confidence_weak=CONF_WEAK,
+                               score_strong=SCORE_STRONG, score_weak=SCORE_WEAK))
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                            ensure_ascii=True, allow_nan=False)
+    return dict(ai_policy_version=AI_POLICY_VERSION, settings_json=serialized,
+                settings_sha256=hashlib.sha256(serialized.encode()).hexdigest())
+
+
 # ---------------------------------------------------------------------------
 # Answer
 # ---------------------------------------------------------------------------
@@ -722,12 +784,12 @@ def parse_reply(content: Any) -> tuple[str, float, str, bool]:
         text = str(content or "")[:REPLY_MAX]
         try:
             data = json.loads(text)
-        except ValueError:
+        except (ValueError, RecursionError):
             m = re.search(r"\{.*\}", text, re.S)
             if m:
                 try:
                     data = json.loads(m.group(0))
-                except ValueError:
+                except (ValueError, RecursionError):
                     data = None
     if not isinstance(data, dict):
         return "unsure", 0.0, "", False
@@ -738,7 +800,7 @@ def parse_reply(content: Any) -> tuple[str, float, str, bool]:
     conf_raw = data.get("confidence")
     try:
         conf = float(conf_raw) if not isinstance(conf_raw, bool) else -1.0
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         conf = -1.0
     if conf != conf or conf < 0 or conf > 1:
         return "unsure", 0.0, reason, False
@@ -834,6 +896,38 @@ def suspect_hit(settings: dict[str, Any], sc: Any) -> bool:
     return lo <= final < low and bool(frozenset(sc.names or ()) & SUSPECT_SYMBOLS)
 
 
+# 2.20: caught mail just over the threshold (what 'Tjek disse' offers for
+# its score alone) also gets the AI's opinion. It is only recorded
+# (applied='review'): never points, never a move or a release. A sure spam
+# or phishing verdict leaves it out of 'Tjek disse' (judged.ai_sure_spam),
+# a sure 'ham' gives it the reason "AI'en mener, den er ægte".
+REVIEW_MARGIN = 3.0
+REVIEW_ACTIONS = ("pending_move", "flagged", "moved_to_junk")
+REVIEW_QUEUE_MAX = 2
+
+
+def review_candidate(sc: Any, *, our_action: str | None, flags: Iterable[str], prior: Any,
+                     settings: dict[str, Any]) -> bool:
+    if settings.get("mode") not in ("shadow", "on") or settings.get("url") is None:
+        return False
+    if not settings.get("review", True) or our_action not in REVIEW_ACTIONS:
+        return False
+    dec = sc.decision
+    if not dec.spam or dec.rule_hit or dec.verdict or sc.threat or getattr(sc, "aged", False):
+        return False
+    if prior is not None and (_get(prior, "user_verdict") or _get(prior, "our_action")
+                              in ("manual_release", "user_rescued")):
+        return False
+    names = frozenset(sc.names or ())
+    if names & (NAMESPOOF_SYMBOLS | CONTACT_SYMBOLS) or PROTECTED_SYMBOL in names:
+        return False
+    try:
+        final, thr = float(sc.final), float(sc.thr)
+    except (TypeError, ValueError):
+        return False
+    return thr <= final < thr + REVIEW_MARGIN
+
+
 @dataclass
 class Job:
     account: str
@@ -846,6 +940,8 @@ class Job:
     queued_at: int
     deadline: int
     messages: list = field(default_factory=list, repr=False)   # the prompt (memory only)
+    prompt_meta: dict = field(default_factory=dict, repr=False)
+    review: bool = False    # 2.20: caught mail just over the line - verdict only sorts 'Tjek disse'
 
 
 _QUEUE: "queue.Queue[Job]" = queue.Queue(maxsize=QUEUE_MAX)
@@ -861,6 +957,16 @@ def queue_size() -> int:
     return _QUEUE.qsize()
 
 
+def queue_status(*, now: float | None = None) -> dict[str, Any]:
+    """Metadata only; excludes a job already being processed by the worker."""
+    now = time.time() if now is None else now
+    with _QUEUE.mutex:
+        stamps = [job.queued_at for job in _QUEUE.queue]
+    valid = bool(stamps) and all(isinstance(ts, (int, float)) and not isinstance(ts, bool)
+                                and math.isfinite(ts) and 0 < ts <= now for ts in stamps)
+    return dict(count=len(stamps), oldest_age_s=now-min(stamps) if valid else None)
+
+
 def maybe_queue(eng: Any, db: Any, acc: Any, sc: Any, *, msgid: str, uv: int, uid: int, folder: str,
                 flags: Iterable[str], prior: Any, raw: bytes, our_action: str | None, now: int) -> str | None:
     """After a scan: queue the AI job when the mail qualifies. Returns the
@@ -870,14 +976,20 @@ def maybe_queue(eng: Any, db: Any, acc: Any, sc: Any, *, msgid: str, uv: int, ui
         return "no_worker"
     settings = load_settings(db.conn)
     why = skip_reason(acc, sc, our_action=our_action, flags=flags, prior=prior, settings=settings)
-    if why is not None:
+    review = why == "decided" and review_candidate(sc, our_action=our_action, flags=flags, prior=prior,
+                                                   settings=settings)
+    if why is not None and not review:
         return why
+    if review and _QUEUE.qsize() > REVIEW_QUEUE_MAX:
+        return "busy"           # inbox mail first: its verdict can still move it in time
     attach = getattr(getattr(sc, "attach", None), "names", None) or ()
     facts = mail_facts(raw, symbols=sc.symbols, attachments=attach)
     grace = int(getattr(acc, "move_grace_seconds", 60) or 0)
+    messages = build_messages(facts)
     job = Job(account=db.account, message_id=msgid, uidvalidity=int(uv), uid=int(uid), folder=folder,
               score_before=float(sc.final), threshold=float(sc.thr), queued_at=int(now),
-              deadline=int(now) + max(0, grace), messages=build_messages(facts))
+              deadline=int(now) + max(0, grace), messages=messages, prompt_meta=prompt_identity(messages),
+              review=review)
     try:
         _QUEUE.put_nowait(job)
     except queue.Full:
@@ -907,10 +1019,10 @@ def process(conn: sqlite3.Connection, job: Job, *, now_fn: Any = time.time, wake
     now = int(now_fn())
     if mode == "off":
         return None
-    if mode == "on" and now > job.deadline:
+    if mode == "on" and now > job.deadline and not job.review:
         note_skip(conn, "late", now)
         return None
-    if mode == "shadow" and now > job.queued_at + SHADOW_MAX_AGE_S:
+    if (mode == "shadow" or job.review) and now > job.queued_at + SHADOW_MAX_AGE_S:
         note_skip(conn, "late", now)
         return None
     st = _status(conn)
@@ -925,6 +1037,7 @@ def process(conn: sqlite3.Connection, job: Job, *, now_fn: Any = time.time, wake
         note_skip(conn, "url", now)
         return None
     body = chat_body(settings, job.messages)
+    configuration_meta = settings_identity(settings, body)
     t0 = time.monotonic()
     status, error, content = "ok", None, None
     try:
@@ -944,13 +1057,15 @@ def process(conn: sqlite3.Connection, job: Job, *, now_fn: Any = time.time, wake
     if status == "ok":
         verdict, conf, reason, valid = parse_reply(content)
         if not valid:
-            error = "ugyldigt svar"
+            status, error = "error", "ugyldigt svar"
     else:
         verdict, conf, reason = None, None, ""
     note_result(conn, status == "ok", done, error)
     pts = points_for(verdict or "", conf or 0.0) if status == "ok" else 0.0
     late = 1 if done > job.deadline else 0
-    if mode == "on" and pts > 0 and not late:
+    if job.review:
+        applied = "review"          # 2.20: only sorts 'Tjek disse'
+    elif mode == "on" and pts > 0 and not late:
         applied = None              # apply_ready takes it
     elif mode == "on" and pts > 0:
         applied = "late"
@@ -961,7 +1076,9 @@ def process(conn: sqlite3.Connection, job: Job, *, now_fn: Any = time.time, wake
                status=status, verdict=verdict, confidence=conf, reason=reason, model=settings["model"],
                latency_ms=latency, error=(error or None), points=pts, late=late, applied=applied,
                applied_at=None if applied is None else done, queued_at=job.queued_at, deadline=job.deadline,
-               created_at=done)
+               created_at=done, prompt_version=job.prompt_meta.get("prompt_version"),
+               facts_version=job.prompt_meta.get("facts_version"),
+               prompt_sha256=job.prompt_meta.get("prompt_sha256"), **configuration_meta)
     cols = ",".join(row)
     conn.execute(f"INSERT INTO ai_verdicts({cols}) VALUES({','.join('?' * len(row))})", tuple(row.values()))
     if applied is None and wake is not None:
@@ -1040,26 +1157,20 @@ def _get(row: Any, key: str) -> Any:
         return None
 
 
-def _block_reason(eng: Any, acc: Any, msg: Any, r: Any) -> str | None:
-    if msg is None:
-        return "gone"
-    if _get(msg, "user_verdict") or _get(msg, "our_action") not in (None, "none"):
-        return "decided"
-    if _get(msg, "threat"):
-        return "threat"
-    if _get(msg, "current_folder") != _get(r, "folder"):
-        return "moved"
+def _guard_facts(msg: Any, r: Any) -> dict:
     try:
         names = {str(s.get("n")) for s in json.loads(_get(msg, "symbols") or "[]") if isinstance(s, dict)}
     except (TypeError, ValueError):
         names = set()
-    if names & CONTACT_SYMBOLS or PROTECTED_SYMBOL in names:
-        return "contact"
-    if names & NAMESPOOF_SYMBOLS:
-        return "namespoof"
-    if SYMBOL in names:
-        return "done"
-    return None
+    return dict(present=msg is not None, user_verdict=_get(msg, "user_verdict"),
+                action=_get(msg, "our_action"), threat=_get(msg, "threat"),
+                folder_matches=_get(msg, "current_folder") == _get(r, "folder"),
+                contact=bool(names & CONTACT_SYMBOLS or PROTECTED_SYMBOL in names),
+                namespoof=bool(names & NAMESPOOF_SYMBOLS), has_ai=SYMBOL in names)
+
+
+def _block_reason(eng: Any, acc: Any, msg: Any, r: Any) -> str | None:
+    return decisionpolicy.ai_skip_reason(_guard_facts(msg, r))
 
 
 def apply_ready(eng: Any, db: Any, log_: logging.Logger, acc: Any, fmap: dict[str, str]) -> int:
@@ -1082,23 +1193,21 @@ def apply_ready(eng: Any, db: Any, log_: logging.Logger, acc: Any, fmap: dict[st
         msgid = r["message_id"]
         with db.tx():
             msg = db.get_message(msgid)
-            if settings["mode"] != "on":
-                why: str | None = "off"
-            elif getattr(acc, "mode", "") != "move":
-                why = "account_mode"
-            elif (int(r["created_at"]) > int(r["deadline"] or 0)
-                  or now > int(r["deadline"] or 0) + APPLY_LATE_S):
-                # Answered after the grace period, or picked up here much later
-                # (busy thread, restart): the user has had the mail for a while.
-                why = "late"
+            pts = float(r["points"] or 0.0)
+            new = round(float(_get(msg, "our_score") or r["score_before"] or 0.0) + pts, 3)
+            facts = dict(_guard_facts(msg, r), mode=settings["mode"], account_mode=getattr(acc, "mode", ""),
+                         late=(int(r["created_at"]) > int(r["deadline"] or 0)
+                               or now > int(r["deadline"] or 0) + APPLY_LATE_S),
+                         final=new, threshold=float(acc.threshold),
+                         original_threshold=float(r["threshold"] or acc.threshold))
+            decision = decisionpolicy.decide_deferred('ai', facts)
+            record = getattr(eng, '_record_policy_trace', None)
+            if record is not None:
+                record(db, msgid, 'ai_policy', decision, now)
+            if decision.action.startswith('skipped:'):
+                outcome = decision.action
             else:
-                why = _block_reason(eng, acc, msg, r)
-            if why is not None:
-                outcome = f"skipped:{why}"
-            else:
-                pts = float(r["points"] or 0.0)
-                new = round(float(_get(msg, "our_score") or r["score_before"] or 0.0) + pts, 3)
-                thr = float(r["threshold"] or acc.threshold)
+                thr = max(facts['original_threshold'], facts['threshold'])
                 try:
                     syms = [s for s in json.loads(_get(msg, "symbols") or "[]") if isinstance(s, dict)]
                 except (TypeError, ValueError):
@@ -1109,7 +1218,7 @@ def apply_ready(eng: Any, db: Any, log_: logging.Logger, acc: Any, fmap: dict[st
                                               symbols=json.dumps(syms, ensure_ascii=False, separators=(",", ":")))
                 detail = (f"{r['verdict']} {float(r['confidence'] or 0):.2f} +{pts:g} "
                           f"score={float(r['score_before'] or 0):.2f}->{new:.2f}")
-                if new >= thr:
+                if decision.spam:
                     fields["our_action"] = "pending_move"
                     db.update_message(msgid, **fields)
                     due = max(now, int(r["queued_at"] or now) + int(getattr(acc, "move_grace_seconds", 60) or 0))
@@ -1199,7 +1308,8 @@ def evaluation(conn: sqlite3.Connection, *, days: int = 30, now: float | None = 
             "SELECT v.*, m.our_action AS m_action, m.user_verdict AS m_verdict, m.sender AS m_sender, "
             "m.subject AS m_subject, m.our_score AS m_score, m.current_folder AS m_folder, "
             "(m.message_id IS NOT NULL) AS m_known FROM ai_verdicts v LEFT JOIN messages m "
-            "ON m.account=v.account AND m.message_id=v.message_id WHERE v.created_at>=? ORDER BY v.id DESC",
+            "ON m.account=v.account AND m.message_id=v.message_id WHERE v.created_at>=? "
+            "AND COALESCE(v.applied, '') <> 'review' ORDER BY v.id DESC",
             (since,)).fetchall()
     except sqlite3.Error:
         rows = []
@@ -1245,6 +1355,9 @@ def evaluation(conn: sqlite3.Connection, *, days: int = 30, now: float | None = 
                 "sender": r["m_sender"] or "", "subject": r["m_subject"] or "", "score_before": r["score_before"],
                 "threshold": r["threshold"], "status": r["status"], "verdict": r["verdict"],
                 "confidence": r["confidence"], "reason": r["reason"] or "", "model": r["model"] or "",
+                "prompt_version": _get(r, "prompt_version"), "facts_version": _get(r, "facts_version"),
+                "prompt_sha256": _get(r, "prompt_sha256"), "ai_policy_version": _get(r, "ai_policy_version"),
+                "settings_sha256": _get(r, "settings_sha256"),
                 "latency_ms": r["latency_ms"], "error": r["error"] or "", "points": float(r["points"] or 0.0),
                 "late": bool(r["late"]), "applied": r["applied"], "mode": r["mode"],
                 "would_move": would_move(r), "outcome": outcome_text(msg), "user": user})

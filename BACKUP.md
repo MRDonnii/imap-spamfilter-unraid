@@ -146,3 +146,117 @@ Prøv det i hånden som root: `deploy/backup-offsite.sh --dry-run` viser, hvilke
 - Ved rollback til 2.0.3 får Brugere igen alle tre rettigheder, og to-trins-login slås fra. Det er sådan 2.0 virkede.
 
 Gendannelse på en anden maskine kræver de samme container-digests og kildetræet under `source/`. Hvis host-IP eller DNS er anderledes, skal WebUI-bindingen og Unbound-forwarderen tilpasses. Der er ikke lavet en destruktiv gendannelse på live-data. Dette dokument er en runbook.
+
+
+## Gendannet opstart af app og Bayes (2.15)
+
+Arkivverifikation og opstart er forskellige prøver. Den månedlige off-site-kontrol i den opdaterede `deploy/backup-offsite.sh` downloader fortsat arkivet og kontrollerer det. Den kører derefter `sfctl backup-drill`: dekryptering til en ny privat, midlertidig mappe, SQLite `quick_check`, indlæsning af den gendannede Redis RDB og HTTP-opstart af appen med den gendannede database. Status godkendes først efter begge trin. Et gammelt positivt resultat fra før 2.15 dokumenterer kun arkivkontrol. Allerede installerede Unraid User Scripts skal opdateres efter den normale installationsvej for at få scriptændringen med.
+
+Manuel prøve i all-in-one-containeren, med et eksisterende krypteret arkiv:
+
+```sh
+docker exec spamfilter sfctl backup-drill /backup/spamfilter-YYYYMMDDTHHMMSSZ.sfbak
+```
+
+Brug arkivets faktiske navn; `--ask-key` spørger interaktivt efter en anden backupnøgle. Nøglen må ikke indgå i kommandolinjen. Prøven kræver både `spamfilter.db` og Redis/Bayes-dumpen. Den oprindelige installation og arkivet ændres ikke. Midlertidige processer stoppes og filerne slettes efter prøven. Der bruges ingen aktive konti eller mail-, SMTP-, trænings- eller push-arbejdere; Redis og HTTP lytter kun på private Unix-sockets. App-processen afviser udgående IP-forbindelser.
+
+Dette bekræfter, at SQLite, applikationen og Redis-data kan indlæses. Det er ikke en fuld gendannelse af udbyderadgang, Rspamd/Bayes-scoring eller ClamAV-signaturer. Containerens særskilte `smoke-test.sh --learn-test` kontrollerer også rigtig Rspamd-scanning, læring og data efter genstart og udfører herefter denne backup/opstart-prøve på den tomme testinstallation. Mailudbydere og live-installation skal fortsat kontrolleres ved ejerens installation. En tom Bayes-base er tilladt ved manuel prøve; JSON-resultatet viser `redis_keys`.
+
+### Ressourcegrænser i opstartsprøven (2.16)
+
+De to prøve-underprocesser (Redis og HTTP-appen) får hver højst 1024 MiB
+**virtuelt adresserum**, 30 CPU-sekunder og 128 åbne filer. Core dumps er slået
+fra. En frisk Python-bootstrap sætter kernelgrænserne og erstatter sig selv
+med den faktiske proces; der bruges ikke `preexec_fn` i den flertrådede app.
+Prøvebørnene bruger `PYTHONMALLOC=malloc`, så store virtuelle allocator-arenaer
+ikke optager budgettet før app-importerne. Den almindelige filterproces ændres ikke.
+
+Et stort Bayes-dump kan kræve et andet budget, fx:
+
+```sh
+docker exec spamfilter sfctl backup-drill BACKUPFIL --memory-mib 2048
+```
+
+Grænsen skal være 128–4096 MiB pr. barn; vælg inden for containerens tilgængelige
+ressourcer. Strengere, allerede arvede kernelgrænser bevares. JSON-resultatets
+`child_limits` viser de anvendte maksimumsbudgetter. Fejlet indlæsning eller et
+overskredet budget giver fejl; en gyldig arkivkontrol alene godkender ikke opstarten.
+Begge børn stoppes ved afslutning eller fejl, og prøvens midlertidige kopi fjernes.
+
+Budgetterne gælder **underprocesserne**. Dekryptering, udpakning og SQLite-
+integritetskontrol kører fortsat i den kaldende proces under containerens
+almindelige grænser. Der oprettes ingen ny container/cgroup. Rspamd, ClamAV,
+eksterne tjenester og login på mailudbyderen er stadig uden for denne prøve.
+
+### Separat offlineprøve af den gendannede AIO-stak (2.16)
+
+Kør fra kildetræet på Docker-værten som root, med et lokalt bygget AIO-billede
+som indeholder `stackrestore.py`:
+
+```sh
+deploy/aio/restore-stack-drill.sh --archive /sti/backup.sfbak \
+  --key-file /privat/backup.key --image imap-spamfilter-unraid:VERSION
+```
+
+Nøglen læses fra en fil; selve nøgleværdien må ikke stå i kommandoen. Scriptet
+ændrer ikke den oprindelige nøgle, backup eller kørende containere. Det kontrollerer fri diskplads før inputkopiering og igen før udpakning. Det opretter
+sin egen private mappe under `operations/restore-drills`, dekrypterer kopien og
+kontrollerer SQLite. Alle konti, ventende job, IMAP-/SMTP-hemmeligheder,
+udbakke, push-abonnementer og AI-indstillinger fjernes eller deaktiveres i
+kopien før opstart. Historik og databaseindhold er stadig private data.
+
+Forberedelse og runtime kører i hver sin nye container med `--network none`,
+ingen publicerede porte, skrivebeskyttet rodfilsystem og grænser for CPU,
+hukommelse og processer. Scriptet kontrollerer Docker-daemonens faktiske
+netværk, porte, mounts og ressourcegrænser **før** hver container startes.
+Runtime får kun den nye appdata-kopi, hverken original installation,
+backuparkiv eller nøgle. Standardbudgettet er 2048 MiB pr. container; vælg
+512–4096 med `--memory-mib`. OOM, timeout eller manglende helbred giver fejl.
+
+Prøven kræver grønt helbred for app, Rspamd, Redis og Unbound samt login-side
+og scanning af en neutral mail. En tilfældig, neutral markør skrives til
+**kopiens** RDB før runtime starter og læses derfra bagefter. Derved opdages
+bl.a. en tom Redis-start, selv om HTTP og processer ellers svarer. Markøren
+fjernes efter kontrollen. Læsbare Rspamd-/Unbound-konfigurationer fra backupen
+bevares; manglende private servicekonfigurationer får billedets skabeloner med
+de gendannede backendnøgler. RDB indlæses med AOF slået fra i kopien.
+
+Det er en offlineprøve af disse fire dele. ClamAV startes bevidst ikke, fordi
+signaturbasen ikke indgår i backupen; scriptet kontrollerer, at antivirus er
+slået fra. Mailudbyderlogin, udgående DNS/SMTP, download af virusdefinitioner,
+alle historiske custom-konfigurationer og faktisk træfsikkerhed godkendes
+ikke af prøven. Oprydning fjerner kun containere med ID'er oprettet af denne
+kørsel og dens egen mappe. Hvis Docker ikke kan fjerne en prøvecontainer,
+bevares kopien, og scriptet returnerer fejl. Der installeres eller aktiveres
+intet i produktion.
+
+
+## Lokale fuzzy-mønstre og gendannelsesbevis (2.19)
+
+Den medfølgende `worker-fuzzy.inc` vælger `backend = "redis"` og arver
+forbindelsen fra `redis.conf`. Lokale fuzzy-mønstre er derfor allerede med i
+`redis/dump.rdb`; der kopieres ingen aktiv SQLite-database fra rspamd/data.
+Backupens AES-GCM-beskyttede `learning_stores` beskriver de gemte konfigurationers
+profil. `backup-verify` returnerer den også; gamle arkiver har intet sådant
+bevis. Det er ikke en kontrol af alle aktive overrides eller eksterne backends.
+En afvigende eksplicit fuzzy-backend eller egne worker-servere markeres som
+ufuldstændig, og seneste vellykkede backup/retention bevares. Manglende læsbar
+worker-konfiguration giver en advarsel og ukendt fuzzy-dækning.
+
+Redis tager et konsistent øjebliksbillede med `redis-cli --rdb`. Fuzzy-workerens
+endnu ikke skrevne opdateringskø er ikke i dette snapshot; standardens interval
+kan give op til cirka ét minuts forsinkelse. Backupen stopper ikke læring og
+lover ikke ét atomisk tidspunkt på tværs af appens SQLite og Redis.
+Brugerdefinerede SQLite-/eksterne fuzzy-lagre, andre Rspamd-lagre og ClamAV-
+signaturer er ikke dokumenteret gendannet af denne prøve.
+
+CI opretter nu en frisk AIO uden konti, netværk eller publicerede porte og
+med kun lokal fuzzy-regel. Den indlærer og kontrollerer en neutral tekst,
+lader fuzzy-køen skrive (prøvens sync=1s), tager en rigtig Redis-replikationskopi
+og krypterer den med den almindelige backupkode. En anden AIO starter fra den
+dekrypterede kopi og skal genkende `FUZZY_LOCAL_SPAM` uden at indlære igen.
+Markøren `state/restore-fuzzy-canary.json` findes kun i CI-prøven; almindelige
+backups indeholder ingen syntetisk træning. Den almindelige månedlige
+`backup-drill` får ikke automatisk denne ekstra fuzzy-prøve.
+
+Baggrund: [Rspamds dokumentation om lokal fuzzy-lagring](https://docs.rspamd.com/tutorials/fuzzy_storage/).

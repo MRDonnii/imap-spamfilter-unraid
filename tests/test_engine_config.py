@@ -48,6 +48,7 @@ def test_load_account_configs_returns_all_without_reading_secrets(eng, tmp_path)
     # 2.0 defaults
     assert a.mode == "shadow" and a.threshold == 8.0
     assert a.max_moves_per_hour == 60 and a.junk_poll_interval == 300
+    assert a.auto_block_repeated_spam is True
     assert a.training_folders is False and a.provider_bonus is True
     assert a.trusted_relays == [] and a.trusted_relay_domains == []
 
@@ -87,6 +88,7 @@ def test_load_accounts_exits_on_unreadable_secret(eng, tmp_path):
 
 @pytest.mark.parametrize("override, fragment", [
     ({"mode": "filter"}, "mode"),
+    ({"auto_block_repeated_spam": "maybe"}, "auto_block_repeated_spam"),
     ({"training_folders": "maybe"}, "training_folders"),
     ({"provider_bonus": "nope"}, "provider_bonus"),
     ({"enabled": "perhaps"}, "enabled"),
@@ -112,11 +114,12 @@ def test_validation_rejects_bad_values(eng, tmp_path, override, fragment):
 def test_valid_new_keys_are_parsed(eng, tmp_path):
     cfg = write_cfg(tmp_path / "accounts.yml", [{
         "name": "a", "user": "a@x.dk", "imap_host": "h", "password": "x",
-        "training_folders": "yes", "provider_bonus": False,
+        "training_folders": "yes", "provider_bonus": False, "auto_block_repeated_spam": False,
         "trusted_relays": ["46.183.139.0/24", "2001:db8::/32"],
         "trusted_relay_domains": ["relay.example.net", ".example.org"],
     }])
     (a,) = eng.load_account_configs(cfg)
+    assert a.auto_block_repeated_spam is False
     assert a.training_folders is True and a.provider_bonus is False
     assert a.trusted_relays == ["46.183.139.0/24", "2001:db8::/32"]
     assert a.trusted_relay_domains == ["relay.example.net", ".example.org"]
@@ -157,7 +160,7 @@ def test_primitives_exist():
                  "normalize_rule_pattern", "request_reload", "learn_message", "MoveUnsupported",
                  "ScanResult", "MAX_FETCH_BYTES", "STATE_DIR", "DB_PATH", "CONFIG_PATH"):
         assert hasattr(engine, name), name
-    assert engine.VERSION == "2.14.2"
+    assert engine.VERSION == "2.20.0"
     assert engine.SCORE_VERSION == 2
 
 

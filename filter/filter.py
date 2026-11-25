@@ -48,6 +48,12 @@ from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientAbortError, IMAPClientError, LoginError
 
 import siteconfig
+import mailidentity
+import quality
+import decisionpolicy
+import holdout
+import decisiontrace
+import policytrial
 
 # A1: the container runs `python -u filter.py`, so this module is __main__.
 # Register it under its import name too so `import filter` in services,
@@ -60,7 +66,7 @@ if __name__ == "__main__":
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.14.2"
+VERSION = "2.20.0"
 SCORE_VERSION = 2  # A4: scores computed with the 2.0 sender context
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "/app/accounts.yml"))
@@ -210,31 +216,19 @@ NOTJUNK_KEYWORDS = frozenset({"$NotJunk", "NotJunk", "NonJunk", "$NonJunk"})
 DELETED_FLAG = b"\\Deleted"
 
 VALID_MODES = {"shadow", "flag", "move"}
-STICKY_HAM_ACTIONS = frozenset({"manual_release", "user_rescued"})
+STICKY_HAM_ACTIONS = decisionpolicy.STICKY_HAM_ACTIONS
 # Rows that say "this Message-ID was in a spam folder" (rescue evidence).
 JUNK_ACTIONS = frozenset({"moved_to_junk", "provider_junk", "user_junked", "manual_mark_spam"})
 # Junk-poll sightings of these were put there by the filter / WebUI, not
 # by the user's mail client, so they never count as a user verdict.
 OUR_JUNK_ACTIONS = frozenset({"pending_move", "moved_to_junk", "manual_mark_spam", "move_failed"})
-DMARC_SPOOF_SYMBOLS = frozenset({"DMARC_POLICY_REJECT", "DMARC_POLICY_QUARANTINE"})
-# An allow rule matches the (forgeable) header From. Besides a DMARC
-# reject/quarantine verdict these also mean "do not trust this From" - most
-# domains (the owner's own included) publish DMARC p=none, so spoofed
-# "from yourself" extortion spam never gets a DMARC policy symbol.
-ALLOW_DISTRUST_SYMBOLS = DMARC_SPOOF_SYMBOLS | frozenset({
-    "R_SPF_FAIL", "R_SPF_SOFTFAIL", "TH_PROVIDER_SPAM",
-    # 2.2 (B7): an aged scan turns rspamd's DMARC/SPF off; the provider's
-    # own verdict at delivery keeps distrusting the From: dmarc=fail
-    # (TH_PROVIDER_AUTH_FAIL; p=none -> TH_PROVIDER_AUTH_SPOOF) and
-    # spf=fail/softfail without an aligned DKIM pass (TH_PROVIDER_AUTH_SPOOF).
-    # TH_AGED_UNVERIFIED: aged scan with no provider SPF/DMARC verdict and no
-    # aligned DKIM signature - nothing proves the From (see _decide).
-    "TH_PROVIDER_AUTH_FAIL", "TH_PROVIDER_AUTH_SPOOF", "TH_AGED_UNVERIFIED"})
+DMARC_SPOOF_SYMBOLS = decisionpolicy.DMARC_SPOOF_SYMBOLS
+ALLOW_DISTRUST_SYMBOLS = decisionpolicy.ALLOW_DISTRUST_SYMBOLS
 
 STAT_METRICS = frozenset({
     "scanned", "spam_detected", "moved", "flagged", "released", "marked_spam",
     "learned_spam", "learned_ham", "skipped_seen", "skipped_no_msgid",
-    "skipped_oversize", "scan_failed", "scan_giveup", "allowlisted",
+    "skipped_oversize", "scan_failed", "scan_giveup", "allowlisted", "junk_identity_unverified",
     "blocklisted", "user_rescued", "user_junked", "move_failed",
     # 2.1
     "autolearned_spam", "autolearned_ham",
@@ -387,6 +381,7 @@ class Account:
     # The user moving mail OUT of the spam folder in their mail app allows
     # that exact sender for this account (owner's wish, 2026-10-21).
     auto_allow_on_rescue: bool = True
+    auto_block_repeated_spam: bool = True
 
     # 2.2 fields (defaulted: older constructors and configs keep working).
     # B2: the owner's own (multi-tenant) shop platform. rspamd lists it on
@@ -480,6 +475,7 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
     "protected_threshold": 18.0,
     "daily_report": False,
     "auto_allow_on_rescue": True,
+    "auto_block_repeated_spam": True,
     "report_hour": 7,
     # 2.2
     "owner_platform_domains": list(DEFAULT_OWNER_PLATFORM_DOMAINS),
@@ -758,6 +754,7 @@ def _build_account(entry: dict[str, Any], defaults: dict[str, Any]) -> Account:
                 merged.get("protected_recipients"), "protected_recipients", label)],
             protected_threshold=_cfg_float(merged["protected_threshold"], "protected_threshold", label),
             daily_report=_cfg_bool(merged["daily_report"], "daily_report", label),
+            auto_block_repeated_spam=_cfg_bool(merged["auto_block_repeated_spam"], "auto_block_repeated_spam", label),
             auto_allow_on_rescue=_cfg_bool(merged["auto_allow_on_rescue"], "auto_allow_on_rescue", label),
             report_hour=_cfg_int(merged["report_hour"], "report_hour", label),
             owner_platform_domains=_cfg_domain_list(
@@ -945,7 +942,7 @@ def validate_account(acc: Account) -> None:
         raise ConfigError(f"{acc.name}: report_hour must be 0..23")
     if acc.protected_threshold < acc.min_threshold_allowed:
         raise ConfigError(f"{acc.name}: protected_threshold below min_threshold_allowed")
-    for key in ("autolearn", "daily_report", "auto_allow_on_rescue"):
+    for key in ("autolearn", "daily_report", "auto_allow_on_rescue", "auto_block_repeated_spam"):
         if not isinstance(getattr(acc, key), bool):
             raise ConfigError(f"{acc.name}: {key} must be true or false")
     for key in ("trusted_forwarders", "protected_recipients"):
@@ -1426,6 +1423,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_last_seen ON messages(account, last_seen
 CREATE INDEX IF NOT EXISTS idx_messages_action ON messages(account, our_action);
 CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(account, current_folder);
 CREATE INDEX IF NOT EXISTS idx_messages_scanned ON messages(account, scanned_at);
+CREATE INDEX IF NOT EXISTS idx_messages_verdict ON messages(account, user_verdict, verdict_at);
 CREATE INDEX IF NOT EXISTS idx_stats_daily_day ON stats_daily(day, metric);
 CREATE INDEX IF NOT EXISTS idx_train_jobs_status ON train_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_daily_receipts_day ON daily_receipts(account, day, kind);
@@ -1449,6 +1447,7 @@ _ADDITIVE_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # name, rule); NULL = no threat / before 2.3. B19: when a rescan
         # (ZAP) moved or flagged the mail.
         ("threat", "TEXT"), ("threat_detail", "TEXT"), ("zapped_at", "INTEGER"),
+        ("decision_names", "TEXT"),
     ),
     "pending_move": (("folder", "TEXT"),
                      # 2.1: due time (E2 fast moves) + score/threshold (update hold).
@@ -1474,6 +1473,11 @@ def init_db() -> None:
         conn.execute("PRAGMA busy_timeout=30000")
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
+        conn.executescript(mailidentity.SCHEMA)
+        conn.executescript(quality.SCHEMA)
+        conn.execute(holdout.SCHEMA)
+        conn.executescript(decisiontrace.SCHEMA)
+        conn.executescript(policytrial.SCHEMA)
         _migrate(conn)
         conn.executescript(SCHEMA_INDEXES)
         try:
@@ -1709,15 +1713,7 @@ def match_sender_rule(conn: sqlite3.Connection, account: str,
     return max(rows, key=rank)
 
 
-def rule_is_force(rule: Any) -> bool:
-    """True for an allow rule marked 'Altid igennem' (never moved, not even
-    when the From looks forged)."""
-    if rule is None:
-        return False
-    try:
-        return rule["kind"] == "allow" and bool(rule["force"])
-    except (IndexError, KeyError):  # row from before the column existed
-        return False
+rule_is_force = decisionpolicy.rule_is_force
 
 
 def add_sender_rule(conn: sqlite3.Connection, account: str, pattern: str, kind: str,
@@ -2042,7 +2038,7 @@ class Db:
         "symbols", "rspamd_action", "sender_ip", "envelope_from",
         "provider_score", "provider_flag", "user_verdict", "verdict_at",
         "verdict_by", "rule_hit", "size", "scanned_at", "origin", "score_version",
-        "sender_auth", "aged", "threat", "threat_detail", "zapped_at",
+        "sender_auth", "aged", "threat", "threat_detail", "zapped_at", "decision_names",
     })
 
     def update_message(self, msgid: str, **fields: Any) -> None:
@@ -2276,6 +2272,22 @@ class Db:
             """,
             (self.account, cutoff),
         )
+        self.conn.execute('DELETE FROM junk_auto_evidence WHERE account=? AND at<?',
+                          (self.account, int(_now())-30*86400))
+        self.conn.execute("DELETE FROM policy_trial_results WHERE account=? AND NOT EXISTS "
+                          "(SELECT 1 FROM messages m WHERE m.account=policy_trial_results.account "
+                          "AND m.message_id=policy_trial_results.message_key)", (self.account,))
+        self.conn.execute("DELETE FROM decision_traces WHERE account=? AND NOT EXISTS "
+                          "(SELECT 1 FROM messages m WHERE m.account=decision_traces.account "
+                          "AND m.message_id=decision_traces.message_key)", (self.account,))
+        self.conn.execute("DELETE FROM scan_observations WHERE account=? AND NOT EXISTS "
+                          "(SELECT 1 FROM messages m WHERE m.account=scan_observations.account "
+                          "AND m.message_id=scan_observations.message_key)", (self.account,))
+        self.conn.execute("DELETE FROM mail_identity WHERE account=? AND NOT EXISTS "
+                          "(SELECT 1 FROM messages m WHERE m.account=mail_identity.account "
+                          "AND m.message_id=mail_identity.message_key) AND NOT EXISTS "
+                          "(SELECT 1 FROM daily_receipts r WHERE r.account=mail_identity.account "
+                          "AND r.message_id=mail_identity.message_key)", (self.account,))
         return cur.rowcount
 
     def prune_stale_pending_learn(self, older_than_s: int) -> int:
@@ -2494,10 +2506,16 @@ def _campaigns() -> Any:
     return campaigns
 
 
-def _campaign_sweep(db: Db, log: logging.Logger, acc: Account, msgid: str, trigger: str) -> None:
+def _campaign_sweep(db: Db, log: logging.Logger, acc: Account, msgid: str, trigger: str,
+                    *, raw: bytes | None = None) -> None:
     """2.6 (A2): a user verdict spam -> queue the copies in every mailbox.
     Runs in the caller's transaction (savepoint); never raises."""
     try:
+        if legit_newsletter(raw, db.get_message(msgid), acc.threshold, db.conn):
+            # A personal bulk-mail preference is neither shared training nor
+            # evidence that the other family's copies are a spam campaign.
+            db.log_event("campaign_local_preference", msgid, detail="nyhedsbrev; ingen kampagne på andre konti")
+            return
         res = _campaigns().on_user_spam(
             db.conn, db.account, msgid, actor="user:move", trigger=trigger, now=int(_now()),
             own_domains=[*(getattr(acc, "owner_platform_domains", None) or ()),
@@ -2838,6 +2856,20 @@ def _rspamd_alive() -> bool:
 
 
 def rspamd_learn(raw: bytes, kind: str, identity: str | None = None, *, user: str | None = None) -> str:
+    """Gate all Bayes POSTs, including trainer mail without Message-ID."""
+    if kind not in ("spam", "ham"):
+        raise ValueError(f"invalid learn kind {kind!r}")
+    try:
+        with holdout.learning_guard(DB_PATH, raw) as allowed:
+            if not allowed:
+                return "held_out"
+            return _rspamd_learn_post(raw, kind, identity, user=user)
+    except (holdout.HoldoutError, OSError, sqlite3.Error):
+        logging.getLogger("filter").warning("Bayes learning skipped: holdout registry unavailable")
+        return "error"
+
+
+def _rspamd_learn_post(raw: bytes, kind: str, identity: str | None = None, *, user: str | None = None) -> str:
     """POST to /learnspam or /learnham; classify the controller's reply.
 
     Returns one of:
@@ -3110,6 +3142,55 @@ def find_uids_by_message_id(client: IMAPClient, message_id: str, *,
     INTERNALDATE and size - e.g. left by an interrupted UIDPLUS move) count
     as one; only the newest (highest UID) is returned, the others are left
     alone. Different deliveries with the same Message-ID stay distinct."""
+    identity = None
+    if Path(DB_PATH).exists():
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            identity = mailidentity.binding(conn, getattr(client, "_sf_account", None), message_id)
+            account = getattr(client, "_sf_account", None)
+            if identity is None and account is not None and conn.execute(
+                    'SELECT 1 FROM messages WHERE account=? AND message_id=?',
+                    (account, message_id)).fetchone():
+                # Legacy verdicts/learns cannot select a new payload by ID
+                # alone. Find-mail can bind a concrete, explicitly selected
+                # copy; queued moves retain their original UID proof.
+                return []
+        except sqlite3.OperationalError:
+            pass  # rollback / test databases without the additive table
+        finally:
+            conn.close()
+    if identity is not None:
+        wire, digest = identity
+        crit = (["HEADER", "Message-ID", wire] if wire and message_id_searchable(wire) else ["ALL"])
+        if undeleted:
+            crit = ["UNDELETED", *crit] if crit != ["ALL"] else ["UNDELETED"]
+        candidates = sorted({int(u) for u in client.search(crit)})
+        matching = []
+        copies = {}
+        for chunk in _chunks(candidates, RECONCILE_FETCH_CHUNK):
+            meta = client.fetch(list(chunk), [_HDR_MSGID, b"RFC822.SIZE", b"FLAGS", b"INTERNALDATE"])
+            for uid, data in meta.items():
+                if parse_envelope(_header_bytes(data))[0] != wire:
+                    continue
+                if int(data.get(b"RFC822.SIZE") or 0) > MAX_FETCH_BYTES:
+                    continue
+                raw = _body_bytes(client.fetch([uid], [b"BODY.PEEK[]"]).get(uid))
+                if raw and mailidentity.fingerprint(raw) == digest:
+                    matching.append(uid)
+                    copies[uid] = (_internaldate_ts(data), data.get(b"RFC822.SIZE"),
+                                   "\\Deleted" not in _flag_names(data.get(b"FLAGS")))
+        if collapse_copies:
+            best = {}
+            for uid in matching:
+                date, size, live = copies[uid]
+                k = (date, size) if date is not None and size is not None else ("uid", uid)
+                old = best.get(k)
+                if old is None or (live, uid) > (copies[old][2], old):
+                    best[k] = uid
+            return sorted(best.values())
+        return matching
+    if message_id.startswith(mailidentity.PREFIX):
+        return []  # missing binding: never search an internal key as a header
     target = normalize_message_id(message_id)
     if not target or not message_id_searchable(target):
         return []
@@ -3157,6 +3238,7 @@ def connect(acc: Account, password: str | None = None, *, timeout: float = IMAP_
     ssl_ctx = ssl.create_default_context() if acc.ssl else None
     client = IMAPClient(acc.imap_host, port=acc.imap_port, ssl=acc.ssl,
                         ssl_context=ssl_ctx, timeout=timeout)
+    client._sf_account = acc.name
     try:
         client.login(acc.user, password)
         client.capabilities()
@@ -3629,7 +3711,7 @@ def learn_message(db: Db, acc: Account, raw: bytes, kind: str, message_id: str |
                   allow_threat: bool = False, bypass_cooldown: bool = False) -> str:
     """Single learn entry point (A2) for engine, services and trainer.
 
-    Returns 'learned' | 'already' | 'declined' | 'rate_limited' | 'error'.
+    Returns 'learned' | 'already' | 'declined' | 'held_out' | 'rate_limited' | 'error'.
     Applies the safeguards: hourly learn limit (unless bypass_rate),
     flip-flop cooldown between opposite learns, 'unlearnable' bookkeeping
     for content rspamd refuses, events and stats. Does not gate on mode:
@@ -3644,6 +3726,8 @@ def learn_message(db: Db, acc: Account, raw: bytes, kind: str, message_id: str |
     if kind not in ("spam", "ham"):
         raise ValueError(f"invalid learn kind {kind!r}")
     log = logging.getLogger(acc.name)
+    if holdout.reserved(db.conn, raw):
+        return _holdout_learn_result(db, message_id)
     if message_id and is_own_registered(db.conn, db.account, message_id):
         log.info("not learning %s: a mail this filter created", message_id)
         return "declined"
@@ -3684,6 +3768,8 @@ def learn_message(db: Db, acc: Account, raw: bytes, kind: str, message_id: str |
     if not bypass_rate and not check_rate(db, log, "learn", acc.max_learns_per_hour):
         return "rate_limited"
     outcome = rspamd_learn(raw, kind, bayes_identity(acc))
+    if outcome == "held_out":
+        return _holdout_learn_result(db, message_id)
     if outcome == "error":
         log.warning("rspamd learn(%s) failed for %s", kind, message_id)
         db.log_event("learn_failed", message_id, detail=f"{kind} {detail}"[:300])
@@ -3722,6 +3808,15 @@ def learn_message(db: Db, acc: Account, raw: bytes, kind: str, message_id: str |
             db.bump(f"learned_{kind}")
     log.info("learned %s as %s (%s): %s", message_id, kind, reason or "-", outcome)
     return outcome
+
+
+def _holdout_learn_result(db: Db, message_id: str | None) -> str:
+    """Terminal skip without a learned_as mark, ledger entry or learn count."""
+    with db.tx():
+        if message_id and db.get_message(message_id) is not None:
+            db.update_message(message_id, pending_learn=None, pending_learn_at=None)
+        db.log_event("learn_held_out", message_id, detail="reserveret prøvemateriale; ingen læring")
+    return "held_out"
 
 
 def _ledger_record(conn: sqlite3.Connection, account: str, message_id: str, kind: str,
@@ -3883,7 +3978,7 @@ def try_learn(
     if acc.mode == "shadow" or not acc.learn_from_moves:
         return False
     res = learn_message(db, acc, raw, kind, msgid, actor="engine", reason=reason)
-    return res in ("learned", "already", "declined")
+    return res in ("learned", "already", "declined", "held_out")
 
 
 # ----- status texts (Danish, shown in the WebUI) ---------------------------
@@ -3916,22 +4011,11 @@ class _InboxMeta:
     received_at: int | None
     msgid: str
     prior: sqlite3.Row | None
+    raw: bytes | None = None
 
 
-@dataclass
-class Decision:
-    spam: bool                  # act on it (how depends on the mode)
-    action: str | None          # our_action when not acting
-    rule_hit: str | None = None
-    rule_id: int | None = None
-    note: str = ""
-    verdict: str | None = None  # user verdict implied by the mail (e.g. $NotJunk)
-    symbols: list = field(default_factory=list)   # 2.1: pseudo-symbols to store (score 0)
-    events: list = field(default_factory=list)    # 2.1: (event, detail) to log
-
-
-def _sticky_ham(row: sqlite3.Row | None) -> bool:
-    return row is not None and (row["user_verdict"] == "ham" or row["our_action"] in STICKY_HAM_ACTIONS)
+Decision = decisionpolicy.Decision
+_sticky_ham = decisionpolicy.sticky_ham
 
 
 def _spam_folders(fmap: dict[str, str]) -> list[str]:
@@ -4048,6 +4132,7 @@ def _handle_rescue(db: Db, log: logging.Logger, acc: Account, fmap: dict[str, st
         db.drop_pending_moves_for(msgid)
         db.conn.execute("DELETE FROM rescan_queue WHERE account=? AND message_id=?", (db.account, msgid))
         db.log_event("user_rescued", msgid, detail=f"from {source}")
+        _junk_rules_after_user_ham(db, log, acc, msgid, prior['sender'])
         # 2.6 (A2): a source of a campaign sweep is back: its copies stay.
         _campaigns().cancel_for_source(db.conn, db.account, msgid, now=now, reason="flyttet tilbage")
         if threat:
@@ -4187,15 +4272,17 @@ def from_authenticated(symbols: Any, sender: str | None) -> bool:
 
 
 def _junk_rules_after_user_junk(db: Db, log: logging.Logger, acc: Account, msgid: str,
-                                sender: str | None) -> None:
+                                sender: str | None, *, explicit: bool = False) -> None:
     """2.12 (#8/#9), inside db.tx(): count the user's move to Junk per sender;
     a conflicting hand-made allow rule becomes a note for the admin, and the
     third move of the same sender in this mailbox a block rule for this
     mailbox only (junkrules.on_user_junk). Never raises.
 
-    The move counts only when the mailbox learns from moves and the From
-    was authenticated (from_authenticated); the owner's domains and every
-    mailbox's domain and address are protected like in the WebUI."""
+    New automated rules use three fresh corrections in 30 days, capped at
+    five per rolling day; the per-account switch can retain suggestions only.
+    The move counts only when the mailbox learns from moves (or the WebUI
+    explicitly marks spam) and the From was authenticated (from_authenticated);
+    the owner's domains and every mailbox's domain and address are protected like in the WebUI."""
     own = [*(acc.owner_platform_domains or ()), *(acc.webshop_domains or ())]
     user = str(getattr(acc, "user", "") or "")
     if "@" in user:
@@ -4205,7 +4292,10 @@ def _junk_rules_after_user_junk(db: Db, log: logging.Logger, acc: Account, msgid
         authed = from_authenticated(_row_get(row, "symbols") if row is not None else None, sender)
         res = _junkrules().on_user_junk(db.conn, acc.name, sender, msgid, now=int(_now()), own_domains=own,
                                         add_rule=add_sender_rule, protection=_owner_protection(acc),
-                                        count=bool(acc.learn_from_moves) and authed)
+                                        count=(explicit or bool(acc.learn_from_moves)) and authed
+                                              and acc.mode in ('move', 'flag'),
+                                        auto_block=bool(getattr(acc, 'auto_block_repeated_spam', True)),
+                                        fresh_only=True)
     except Exception as ex:  # noqa: BLE001 - bookkeeping only, never fail the junk poll
         log.warning("junk rule bookkeeping for %s failed: %s", acc.name, type(ex).__name__)
         return
@@ -4216,6 +4306,40 @@ def _junk_rules_after_user_junk(db: Db, log: logging.Logger, acc: Account, msgid
         log.info("blocked a sender for %s after %d moves to Junk (rule %s)", acc.name, res["n"], res["blocked"])
     elif res.get("suggest"):
         db.log_event("junk_block_suggested", msgid, detail=f"n={res['n']}")
+
+
+def _junk_rules_after_user_ham(db: Db, log: logging.Logger, acc: Account, msgid: str,
+                               sender: str | None) -> None:
+    """Inside the verdict transaction: undo only our own automatic block."""
+    rid = _junkrules().reset_on_ham(db.conn, acc.name, sender, now=int(_now()))
+    if rid is not None:
+        # This rule may have queued other copies during their grace period.
+        # Re-evaluate only its normal scan moves under current policy: an
+        # independent score/threat/manual verdict or another rule still wins.
+        waiting = db.conn.execute(
+            'SELECT m.*, p.threshold AS pending_threshold FROM messages m JOIN pending_move p '
+            'ON p.account=m.account AND p.message_id=m.message_id '
+            'WHERE m.account=? AND m.rule_hit=? AND p.origin IS NULL',
+            (acc.name, f'block:{rid}')).fetchall()
+        cancelled = 0
+        for candidate in waiting:
+            decision = _auto_block_pending_decision(db, acc, candidate, candidate['pending_threshold'])
+            if not decision.spam:
+                db.drop_pending_moves_for(candidate['message_id'])
+                db.update_message(candidate['message_id'], our_action=decision.action or 'none',
+                                  rule_hit=decision.rule_hit)
+                cancelled += 1
+        db.log_event('junk_auto_block_removed', msgid, detail=f'rule={rid}; user ham; cancelled={cancelled}')
+
+
+def _auto_block_pending_decision(db: Db, acc: Account, msg: sqlite3.Row, threshold: float | None) -> Decision:
+    """Resolve remaining score/rules without a reversed automatic rule."""
+    names = frozenset(json.loads(msg['decision_names'])) if msg['decision_names'] else frozenset(
+        x['n'] for x in _symbol_list(msg['symbols']))
+    return _decide(db, acc, msg, msg['sender'], float(msg['our_score'] or 0), names, set(),
+                   threshold=max(float(threshold or acc.threshold), float(acc.threshold)),
+                   auth=parse_sender_auth(msg['sender_auth']), threat=msg['threat'],
+                   aged_unverified=bool(msg['aged']) and 'TH_AGED_UNVERIFIED' in (msg['symbols'] or ''))
 
 
 def _auto_allow_sender(db: Db, log: logging.Logger, acc: Account, msgid: str,
@@ -4291,19 +4415,32 @@ def _classify_inbox_uid(client: IMAPClient, db: Db, log: logging.Logger, acc: Ac
     size = data.get(b"RFC822.SIZE")
     size = int(size) if size is not None else None
     msgid, _subj, _from = parse_envelope(_header_bytes(data))
-    if not msgid:
+    prior = db.get_message(msgid) if msgid else None
+    raw = None
+    # A previously seen ID, an internal key, or an exemption must prove its
+    # content before inheriting any decision. First deliveries stay batched.
+    known_binding = mailidentity.binding(db.conn, db.account, msgid) if msgid else None
+    own = bool(msgid and (_is_our_receipt(db, msgid, _header_bytes(data))
+                          or _is_own_notification(db, msgid, _header_bytes(data))))
+    if not msgid or prior is not None or msgid.startswith(mailidentity.PREFIX) or own:
+        if size is not None and size > MAX_FETCH_BYTES:
+            db.bump("skipped_oversize")
+            return None
+        raw = _body_bytes(client.fetch([uid], [b"BODY.PEEK[]"]).get(uid))
+        if not raw:
+            return False if not _scan_failed(db, log, uv, uid, "identity body missing", processed) else None
         with db.tx():
-            db.log_event("skipped_no_msgid", detail=f"uid={uid}")
-            db.bump("skipped_no_msgid")
-        return None
-    if _is_our_receipt(db, msgid, _header_bytes(data)):
-        return None  # E12: our own daily receipt - never scored
-    if _is_own_notification(db, msgid, _header_bytes(data)):
-        # 2.3 (B29): a notification this filter mailed (alerts, codes,
-        # weekly report) - never scored, moved or learned, exactly like a
-        # receipt (they go from the owner's address to the owner).
-        return None
-    prior = db.get_message(msgid)
+            key = mailidentity.bind(db.conn, db.account, msgid, raw,
+                                    legacy_exists=prior is not None and not db.conn.execute(
+                                        "SELECT 1 FROM mail_identity WHERE account=? AND message_key=?",
+                                        (db.account, msgid)).fetchone())
+        if own and ((known_binding and mailidentity.fingerprint(raw) == known_binding[1]) or
+                    db.conn.execute("SELECT 1 FROM mail_identity WHERE account='*notification*' "
+                                    "AND wire_id=? AND fingerprint=?",
+                                    (parse_envelope(raw)[0], mailidentity.fingerprint(raw))).fetchone()):
+            return None
+        msgid = key
+        prior = db.get_message(msgid)
     if prior is None and "\\Seen" in flags:
         # Read before we ever saw it (another client, or mail that predates
         # us): the user has handled it, leave it alone.
@@ -4363,127 +4500,44 @@ def _classify_inbox_uid(client: IMAPClient, db: Db, log: logging.Logger, acc: Ac
             db.bump("skipped_oversize")
         return None
     return _InboxMeta(uid=uid, flags=flags, size=size, received_at=_internaldate_ts(data),
-                      msgid=msgid, prior=prior)
+                      msgid=msgid, prior=prior, raw=raw)
 
 
-def _rule_domain(rule: Any) -> str:
-    return str(rule["pattern"] or "").partition("@")[2].lower()
-
-
-def _domain_under(host: str | None, domain: str) -> bool:
-    h = (host or "").strip().lower().rstrip(".")
-    return bool(h) and bool(domain) and (h == domain or h.endswith("." + domain))
-
-
-def parse_sender_auth(value: Any) -> dict[str, Any]:
-    """messages.sender_auth JSON -> {"dkim": [domains], "host": str|None}."""
-    if isinstance(value, dict):
-        data = value
-    else:
-        try:
-            data = json.loads(value) if value else {}
-        except (TypeError, ValueError):
-            data = {}
-    if not isinstance(data, dict):
-        data = {}
-    dkim = [str(d).lower() for d in (data.get("dkim") or []) if d][:20]
-    host = data.get("host")
-    return {"dkim": dkim, "host": str(host).lower() if host else None}
-
-
-def force_verification(rule: Any, auth: dict[str, Any] | None) -> str | None:
-    """E8: how an 'Altid igennem' rule's domain is verified for this mail:
-    'dkim:<d>' (R_DKIM_ALLOW for the domain or a subdomain), 'host:<h>'
-    (the verified sending host lies under the domain, e.g. a shop
-    platform's mail-sender-N host behind its own forwarder), else None."""
-    if rule is None:
-        return None
-    dom = _rule_domain(rule)
-    a = parse_sender_auth(auth)
-    for d in a["dkim"]:
-        if _domain_under(d, dom):
-            return f"dkim:{d}"
-    if _domain_under(a["host"], dom):
-        return f"host:{a['host']}"
-    return None
+_rule_domain = decisionpolicy._rule_domain
+_domain_under = decisionpolicy._domain_under
+parse_sender_auth = decisionpolicy.parse_sender_auth
+force_verification = decisionpolicy.force_verification
 
 
 def _decide(db: Db, acc: Account, prior: sqlite3.Row | None, sender_addr: str | None,
             final: float, names: frozenset, flags: set[str], *, from_header: bool = True,
             threshold: float | None = None, auth: dict[str, Any] | None = None,
             aged_unverified: bool = False, threat: str | None = None) -> Decision:
-    """Spam decision after scoring: sticky verdicts, sender rules
-    (allow unless the From looks forged; 'Altid igennem' allow always when
-    the mail verifiably comes from the rule's domain; block regardless of
-    score). from_header=False: sender_addr is only the envelope sender (no
-    From address) - an 'Altid igennem' rule then acts as a normal allow
-    rule, see force_allow_rule. `threshold` = effective threshold (E9).
-    aged_unverified (2.2 B7): an aged scan (SPF/DMARC off) where neither the
-    provider's delivery-time SPF/DMARC verdict nor an aligned DKIM signature
-    vouches for the From - a normal allow rule is then not trusted
-    (TH_AGED_UNVERIFIED), like R_SPF_FAIL would in a fresh scan.
-    threat (2.3 B16): 'virus' is spam regardless of threshold, allow and
-    'Altid igennem' rules (known contacts / protected recipients cannot
-    help either). The other classes override normal allow rules and the
-    threshold; only an 'Altid igennem' rule verified by DKIM still passes,
-    logged as threat_force_pass."""
-    thr = acc.threshold if threshold is None else threshold
-    over = final >= thr
-    if _sticky_ham(prior):
-        return Decision(False, prior["our_action"] or "none", note="sticky ham verdict")
-    if threat == "virus":
-        return Decision(True, None, note="threat virus")
-    rule = match_sender_rule(db.conn, acc.name, sender_addr) if sender_addr else None
-    if rule is not None and rule["kind"] == "block":
-        return Decision(True, None, rule_hit=f"block:{rule['id']}", rule_id=int(rule["id"]),
-                        note="block rule")
-    if threat:
-        if (rule is not None and threat in THREAT_FORCE_PASSABLE and rule_is_force(rule) and from_header):
-            how = force_verification(rule, auth)
-            if how is not None and how.startswith("dkim:"):
-                return Decision(False, "allowlisted", rule_hit=f"allow:{rule['id']}", rule_id=int(rule["id"]),
-                                note=f"force allow rule ({how}) despite threat {threat}",
-                                events=[("threat_force_pass", f"{threat} rule={rule['id']} {how}")])
-        ignored = f" (allow rule {rule['id']} ignored)" if rule is not None and rule["kind"] == "allow" else ""
-        return Decision(True, None, note=f"threat {threat}{ignored}")
-    extra_syms: list[dict] = []
-    extra_events: list[tuple[str, str]] = []
-    unverified_note = ""
-    if rule is not None and rule["kind"] == "allow":
-        distrust = names & ALLOW_DISTRUST_SYMBOLS
-        if aged_unverified and "TH_AGED_UNVERIFIED" not in distrust:
-            distrust = distrust | {"TH_AGED_UNVERIFIED"}
-        if rule_is_force(rule) and from_header:
-            how = force_verification(rule, auth)
-            if how is not None:
-                # 'Altid igennem': the owner vouches for this sender (e.g. their
-                # own webshop platform, forwarded with SRS and sometimes released
-                # from the provider's quarantine with a broken DKIM signature)
-                # and the mail verifiably comes from that domain. Never flagged
-                # or moved - not by score, not by spoof symbols.
-                return Decision(False, "allowlisted", rule_hit=f"allow:{rule['id']}", rule_id=int(rule["id"]),
-                                note=f"force allow rule ({how})" + (f" (ignored {','.join(sorted(distrust))})"
-                                                                    if distrust else ""))
-            # Spoof guard (E8): the From claims the domain, but neither DKIM
-            # nor the sending path proves it - a normal allow rule.
-            extra_syms.append({"n": "TH_FORCE_UNVERIFIED", "s": 0.0, "o": [str(rule["pattern"])[:120]]})
-            extra_events.append(("force_unverified", f"rule={rule['id']} {rule['pattern']}"))
-            unverified_note = "force_unverified; "
-        if distrust:
-            # A forged From of an allowed sender must not bypass the filter:
-            # decide by score like any other mail.
-            if "TH_AGED_UNVERIFIED" in distrust and "TH_AGED_UNVERIFIED" not in names:
-                extra_syms.append({"n": "TH_AGED_UNVERIFIED", "s": 0.0,
-                                   "o": ["ingen udbyder-godkendelse", "ingen DKIM-signatur"]})
-            return Decision(over, None if over else "none",
-                            note=f"{unverified_note}allow rule ignored: {','.join(sorted(distrust))}",
-                            symbols=extra_syms, events=extra_events)
-        return Decision(False, "allowlisted" if over else "none",
-                        rule_hit=f"allow:{rule['id']}", rule_id=int(rule["id"]),
-                        note=f"{unverified_note}allow rule", symbols=extra_syms, events=extra_events)
-    if prior is not None and prior["user_verdict"] == "spam":
-        return Decision(True, None, note="user verdict spam")
-    return Decision(over, None if over else "none")
+    """Resolve the current account rule; apply the shared, pure policy.
+
+    Flags are handled by the scan/move guards before this existing entry point.
+    Avoid a rule lookup for sticky verdicts and viruses as before.
+    """
+    rule = (match_sender_rule(db.conn, acc.name, sender_addr)
+            if sender_addr and not _sticky_ham(prior) and threat != "virus" else None)
+    effective = acc.threshold if threshold is None else threshold
+    decision = decisionpolicy.decide(prior, rule, final, names, threshold=effective,
+                                     from_header=from_header, auth=auth,
+                                     aged_unverified=aged_unverified, threat=threat)
+    try:
+        decision.policy_input = decisiontrace.inputs(prior, rule, final, names, threshold=effective,
+                                                    from_header=from_header, auth=auth,
+                                                    aged_unverified=aged_unverified, threat=threat)
+    except (ValueError, TypeError, AttributeError) as ex:
+        logging.getLogger(acc.name).warning("policy evidence unavailable: %s", type(ex).__name__)
+    return decision
+
+
+def _record_policy_trace(db: Db, msgid: str, stage: str, decision: Decision, now: int) -> None:
+    try:
+        decisiontrace.record(db.conn, db.account, msgid, stage, decision, now)
+    except (sqlite3.Error, ValueError, TypeError) as ex:
+        logging.getLogger(db.account).warning("policy trace unavailable: %s", type(ex).__name__)
 
 
 def effective_threshold(acc: Account, ctx: dict[str, Any] | None) -> tuple[float, str | None]:
@@ -4762,7 +4816,7 @@ THREAT_ORDER = (("virus", THREAT_VIRUS), ("phish", THREAT_PHISH), ("malware_url"
 THREAT_CLASSES = ("virus", "phish", "malware_url", "attachment", "impersonation", "lookalike")
 # Classes that still let a DKIM-verified 'Altid igennem' sender through
 # (logged as threat_force_pass). Virus never passes.
-THREAT_FORCE_PASSABLE = frozenset({"phish", "malware_url", "attachment", "impersonation", "lookalike"})
+THREAT_FORCE_PASSABLE = decisionpolicy.THREAT_FORCE_PASSABLE
 THREAT_LABELS = {"virus": "Virus", "phish": "Phishing-link", "malware_url": "Malware-link",
                  "attachment": "Farlig vedhæftning", "impersonation": "Forfalsket afsender",
                  "lookalike": "Efterligner jeres domæne"}
@@ -5517,7 +5571,11 @@ def _scan_and_act(client: IMAPClient, db: Db, log: logging.Logger, acc: Account,
     score was produced. 2.6 (C2): with `dmarc_cfg` a clean DMARC aggregate
     report from a trusted reporter is moved to the DMARC folder here, after
     the scan; one that is not moved goes on through the normal path."""
-    msgid = meta.msgid
+    wire_id = parse_envelope(raw)[0]
+    with db.tx():
+        msgid = mailidentity.bind(db.conn, db.account, wire_id, raw)
+    meta.msgid = msgid
+    meta.prior = db.get_message(msgid)
 
     def scanned() -> None:
         if state.scan_fail_streak:
@@ -5577,6 +5635,7 @@ def _scan_and_act(client: IMAPClient, db: Db, log: logging.Logger, acc: Account,
         sender_auth=json.dumps(sc.auth, separators=(",", ":")),
         aged=1 if aged else 0,
         threat=sc.threat, threat_detail=sc.threat_detail,
+        decision_names=json.dumps(sorted(sc.names | {x["n"] for x in decision.symbols})),
     )
     if decision.verdict:
         fields.update(user_verdict=decision.verdict, verdict_at=now,
@@ -5584,6 +5643,13 @@ def _scan_and_act(client: IMAPClient, db: Db, log: logging.Logger, acc: Account,
     with db.tx():
         db.upsert_message(msgid, fmap["inbox"], sender, subject, meta.received_at)
         db.update_message(msgid, **fields)
+        quality.observe(db.conn, db.account, msgid, final, thr, decision.spam, VERSION, now)
+        _record_policy_trace(db, msgid, "scan", decision, now)
+        try:
+            policytrial.observe(db.conn, db.account, msgid, decision,
+                                protected_threshold=acc.protected_threshold, version=VERSION, now=now)
+        except (sqlite3.Error, ValueError, TypeError) as ex:
+            log.warning("policy trial unavailable: %s", type(ex).__name__)
         db.conn.execute(
             "UPDATE messages SET origin=COALESCE(origin, 'inbox_scan') WHERE account=? AND message_id=?",
             (db.account, msgid))
@@ -5890,9 +5956,12 @@ def _rescan_act(client: IMAPClient, db: Db, log: logging.Logger, acc: Account, u
     fields: dict[str, Any] = dict(
         our_score=sc.final, rspamd_score=sc.res.score,
         symbols=json.dumps(sc.symbols, ensure_ascii=False, separators=(",", ":")),
+        decision_names=json.dumps(sorted(sc.names | {x["n"] for x in sc.decision.symbols})),
+        sender_auth=json.dumps(sc.auth, separators=(",", ":")),
         rule_hit=sc.decision.rule_hit, threat=sc.threat, threat_detail=sc.threat_detail,
         aged=1 if sc.aged else 0, last_seen=now)
     with db.tx():
+        _record_policy_trace(db, msgid, "rescan_policy", sc.decision, now)
         dequeue()
         if seen and not sc.threat:
             # Read mail is never taken away for spam alone (B19): the user
@@ -6096,7 +6165,9 @@ def _av_rescan_one(client: IMAPClient, db: Db, log: logging.Logger, acc: Account
     if not raw:
         _av_reschedule(db, r, "body missing")
         return "retry"
-    if normalize_message_id(parse_envelope(raw)[0]) not in (None, normalize_message_id(msgid)):
+    if (msgid.startswith(mailidentity.PREFIX) and msgid != mailidentity.PREFIX + mailidentity.fingerprint(raw)) or (
+            not msgid.startswith(mailidentity.PREFIX) and normalize_message_id(parse_envelope(raw)[0])
+            not in (None, normalize_message_id(msgid))):
         _av_drop(db, r, "en anden mail har UID'en")
         return "dropped"
     received_at = _internaldate_ts(data) or row["received_at"]
@@ -6245,11 +6316,12 @@ def scan_inbox(
                 break
             # E11: a long backlog scan is not a silent (stale) thread.
             _touch_alive(db)
-            bodies = client.fetch([m.uid for m in sub], [b"BODY.PEEK[]"])
+            fetch_uids = [m.uid for m in sub if m.raw is None]
+            bodies = client.fetch(fetch_uids, [b"BODY.PEEK[]"]) if fetch_uids else {}
             for meta in sub:
                 if SHUTDOWN.is_set():
                     break
-                raw = _body_bytes(bodies.get(meta.uid))
+                raw = meta.raw or _body_bytes(bodies.get(meta.uid))
                 if not raw:
                     _scan_failed(db, log, uv, meta.uid, "body missing", processed)
                     continue
@@ -6455,6 +6527,9 @@ def _execute_due_moves_in(client: IMAPClient, db: Db, log: logging.Logger, acc: 
         force_rule: sqlite3.Row | None = None
         if _journal_has(db, msgid):
             continue  # an interrupted move of this message awaits repair
+        if db.conn.execute('SELECT 1 FROM pending_move WHERE account=? AND uidvalidity=? AND uid=?',
+                           (db.account, uv, uid)).fetchone() is None:
+            continue  # a user action cancelled it while FETCH was in flight
         if uid not in fetched:
             skip = "move_skipped_missing"
         else:
@@ -6469,8 +6544,46 @@ def _execute_due_moves_in(client: IMAPClient, db: Db, log: logging.Logger, acc: 
             if force_rule is not None and threat and (threat not in THREAT_FORCE_PASSABLE
                                                       or not str(how).startswith("dkim:")):
                 force_rule = None  # B16: a virus always goes; other threats need DKIM
+            current_allow = None
+            if msg is not None and msg["sender"]:
+                current_allow = match_sender_rule(db.conn, acc.name, msg["sender"])
+                if (current_allow is not None and current_allow["kind"] == "allow"
+                        and not rule_is_force(current_allow) and msg["decision_names"]):
+                    decision = _decide(db, acc, msg, msg["sender"], float(msg["our_score"] or 0),
+                                       frozenset(json.loads(msg["decision_names"])) if msg["decision_names"]
+                                       else frozenset(x["n"] for x in _symbol_list(msg["symbols"])), flags,
+                                       auth=parse_sender_auth(msg["sender_auth"]), threat=threat,
+                                       aged_unverified=bool(msg["aged"]) and
+                                       "TH_AGED_UNVERIFIED" in (msg["symbols"] or ""))
+                    _record_policy_trace(db, msgid, "pending_allow_recheck", decision, int(_now()))
+                    if decision.spam or not decision.rule_hit:
+                        current_allow = None
+                else:
+                    current_allow = None
+            auto_undo = None
+            hit = str(_row_get(msg, 'rule_hit') or '')
+            if hit.startswith('block:'):
+                automatic_rule = db.conn.execute(
+                    "SELECT 1 FROM junk_sender_notes WHERE account=? AND sender=? AND kind='suggest' "
+                    "AND status IN ('auto_blocked','undone') AND CAST(block_rule_id AS TEXT)=?",
+                    (db.account, _junkrules()._addr(_row_get(msg, 'sender')), hit.partition(':')[2])).fetchone()
+                if automatic_rule is not None:
+                    # Covers the existing Tjek disse undo button as well as
+                    # rescued mail, including a reversal during live FETCH.
+                    auto_undo = _auto_block_pending_decision(db, acc, msg, _row_get(r, 'threshold'))
             if _sticky_ham(msg):
                 skip = "move_skipped_verdict"
+            elif auto_undo is not None and not auto_undo.spam:
+                skip = 'move_skipped_auto_block'
+            elif current_allow is not None:
+                force_rule = current_allow
+                skip = "move_skipped_rule"
+            elif (msg is not None and not threat and not msg["user_verdict"]
+                  and not msg["rule_hit"] and _row_get(r, "origin") != "campaign"
+                  and _row_get(r, "threshold") is not None and msg["our_score"] is not None
+                  and acc.threshold > float(r["threshold"])
+                  and float(msg["our_score"] or 0) < acc.threshold):
+                skip = "move_skipped_threshold"
             elif (_row_get(r, "origin") in ("zap", "ai") and "\\Seen" in flags and not threat
                   and _row_get(msg, "user_verdict") != "spam"):
                 # B19: read during the short grace - never taken away for
@@ -6492,8 +6605,10 @@ def _execute_due_moves_in(client: IMAPClient, db: Db, log: logging.Logger, acc: 
             with db.tx():
                 db.drop_pending_move(uv, uid)
                 db.log_event(skip, msgid, detail=f"uid={uid}")
-                if skip in ("move_skipped_user_flag", "zap_skipped_read"):
+                if skip in ("move_skipped_user_flag", "zap_skipped_read", "move_skipped_threshold"):
                     db.update_message(msgid, our_action="none")
+                elif skip == 'move_skipped_auto_block':
+                    db.update_message(msgid, our_action=auto_undo.action or 'none', rule_hit=auto_undo.rule_hit)
                 elif skip == "move_skipped_rule":
                     db.update_message(msgid, our_action="allowlisted", rule_hit=f"allow:{force_rule['id']}")
                     db.bump("allowlisted")
@@ -6893,13 +7008,28 @@ def _junk_message_seen(db: Db, log: logging.Logger, acc: Account, fmap: dict[str
                        first_pass: bool = False) -> None:
     hdr = _header_bytes(data)
     msgid, subject, sender = parse_envelope(hdr)
+    body = _body_bytes(data)
+    if not body:
+        # Neither a missing FETCH body nor an oversized mail proves that
+        # this is the message whose ID appears in the headers. Do not
+        # overwrite a previous release or schedule header-only learning.
+        db.log_event("junk_identity_unverified", detail=f"uid={uid}")
+        db.bump("junk_identity_unverified")
+        return
+    with db.tx():
+        wire = parse_envelope(body)[0]
+        msgid = mailidentity.bind(db.conn, db.account, wire, body,
+                                legacy_exists=wire is not None and db.get_message(wire) is not None
+                                and mailidentity.binding(db.conn, db.account, wire) is None)
     if not msgid:
         return
     if _is_our_receipt(db, msgid, hdr):
         # E12: our own daily receipt dragged into a spam folder is neither a
         # user verdict nor provider junk - never learned.
         return
-    if _is_own_notification(db, msgid, hdr):
+    if _is_own_notification(db, msgid, hdr) and body and db.conn.execute(
+            "SELECT 1 FROM mail_identity WHERE account='*notification*' AND wire_id=? AND fingerprint=?",
+            (parse_envelope(body)[0], mailidentity.fingerprint(body))).fetchone():
         # 2.3 (B29): the same for our own notification mails (alerts, codes,
         # reports): never a verdict, never learned, never a contact signal.
         return
@@ -6973,7 +7103,7 @@ def _junk_message_seen(db: Db, log: logging.Logger, acc: Account, fmap: dict[str
                 # 2.6 (A2): only the filter's own folder proves a user action
                 # - the provider may move mail into its junk folder itself
                 # after delivery.
-                _campaign_sweep(db, log, acc, msgid, "user_junked")
+                _campaign_sweep(db, log, acc, msgid, "user_junked", raw=body)
             log.info("user moved %s to %s", msgid, junk)
             return
         if (prior["current_folder"] == inbox and junk == fmap["junk"]
@@ -7012,6 +7142,10 @@ def reconcile_junk(client: IMAPClient, db: Db, log: logging.Logger, acc: Account
         "SELECT message_id, current_folder FROM messages WHERE account=? AND current_folder IN (?, 'gone')",
         (db.account, junk),
     ).fetchall()
+    for r in rows:
+        if r["message_id"].startswith(mailidentity.PREFIX):
+            if find_uids_by_message_id(client, r["message_id"], undeleted=True):
+                present.add(r["message_id"])
     gone = [r["message_id"] for r in rows if r["current_folder"] == junk and r["message_id"] not in present]
     back = [r["message_id"] for r in rows if r["current_folder"] == "gone" and r["message_id"] in present]
     still = [r["message_id"] for r in rows if r["current_folder"] == junk and r["message_id"] in present]
@@ -7070,6 +7204,10 @@ def _poll_one_junk(client: IMAPClient, db: Db, log: logging.Logger, acc: Account
             data = fetched.get(uid)
             if data is not None:
                 try:
+                    if int(data.get(b"RFC822.SIZE") or 0) <= MAX_FETCH_BYTES:
+                        body = _body_bytes(client.fetch([uid], [b"BODY.PEEK[]"]).get(uid))
+                        if body:
+                            data[b"BODY[]"] = body
                     _junk_message_seen(db, log, acc, fmap, uid, data, folder,
                                        first_pass=first_pass or uid <= preexisting_max)
                 except _CONN_ERRORS:
@@ -7147,6 +7285,8 @@ def _score_provider_junk(client: IMAPClient, db: Db, log: logging.Logger, acc: A
         fields: dict[str, Any] = dict(
             our_score=sc.final, rspamd_score=sc.res.score, rspamd_action=sc.res.action,
             symbols=json.dumps(sc.symbols, ensure_ascii=False, separators=(",", ":")),
+            decision_names=json.dumps(sorted(sc.names | {x["n"] for x in sc.decision.symbols})),
+            sender_auth=json.dumps(sc.auth, separators=(",", ":")),
             scanned_at=now, score_version=SCORE_VERSION if sc.ctx_ok else 1,
             threat=sc.threat, threat_detail=sc.threat_detail)
         with db.tx():
@@ -7159,7 +7299,7 @@ def _score_provider_junk(client: IMAPClient, db: Db, log: logging.Logger, acc: A
 
 def poll_junk(client: IMAPClient, db: Db, log: logging.Logger, acc: Account,
               fmap: dict[str, str], state: AccountState | None = None) -> None:
-    """Header-only look at new spam-folder mail (flag/move only): detects
+    """Bounded PEEK at new spam-folder mail (flag/move only): detects
     the user moving mail into it and records provider junk; reconciles
     every 6 h; then promotes due pending learns. Also watches the
     provider's own spam folder when the filter uses a separate one."""
@@ -7354,7 +7494,7 @@ def _drain_train_folder(
             with db.tx():
                 db.upsert_message(msgid, folder, sender, subject, _internaldate_ts(data))
         res = learn_message(db, acc, raw, kind, msgid, actor="engine", reason=reason)
-        if res in ("learned", "already", "declined"):
+        if res in ("learned", "already", "declined", "held_out"):
             done.append(uid)
             if not synthetic:
                 moved_msgids.append(msgid)
@@ -7936,6 +8076,8 @@ def _append_receipt(client: IMAPClient, conn: sqlite3.Connection, acc: Account, 
                      (acc.name, msgid, day, "preview" if preview else "daily", len(items), int(now),
                       actor or None))
     try:
+        with _autocommit(conn):
+            mailidentity.bind(conn, acc.name, msgid, raw)
         client.append(inbox, raw, flags=(), msg_time=datetime.fromtimestamp(now, timezone.utc))
     except Exception:
         with _autocommit(conn):
@@ -8142,6 +8284,8 @@ def _append_weekly(client: IMAPClient, conn: sqlite3.Connection, acc: Account, i
                      (acc.name, msgid, data["week"], kind, int(data.get("totals", {}).get("moved") or 0),
                       int(now), actor or None))
     try:
+        with _autocommit(conn):
+            mailidentity.bind(conn, acc.name, msgid, raw)
         client.append(inbox, raw, flags=(), msg_time=datetime.fromtimestamp(now, timezone.utc))
     except Exception:
         with _autocommit(conn):
@@ -8872,6 +9016,8 @@ def maybe_send_threat_notice(client: IMAPClient, db: Db, log: logging.Logger, ac
                         "sent_by) VALUES(?,?,?,?,?,?,?)",
                         (acc.name, msgid, stats_day(now), THREAT_NOTICE_KIND, len(items), int(now), None))
     try:
+        with db.tx():
+            mailidentity.bind(db.conn, acc.name, msgid, raw)
         client.append(inbox, raw, flags=(), msg_time=datetime.fromtimestamp(now, timezone.utc))
     except _CONN_ERRORS:
         with _autocommit(db.conn):
@@ -9082,6 +9228,7 @@ def _prepare_pending_moves(db: Db, acc: Account) -> None:
 
 def _on_connected(client: IMAPClient, db: Db, log: logging.Logger, acc: Account,
                   state: AccountState) -> None:
+    client._sf_account = acc.name
     state.caps = client_capabilities(client)
     setup = setup_folders(client, acc, log, db)
     acc.folder_map = setup.fmap

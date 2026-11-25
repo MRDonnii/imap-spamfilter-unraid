@@ -75,6 +75,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import siteconfig
+import mailidentity
 
 log = logging.getLogger("mailer")
 
@@ -353,6 +354,7 @@ def ensure_schema() -> None:
         conn = _connect()
         try:
             conn.executescript(SCHEMA)
+            conn.executescript(mailidentity.SCHEMA)
             conn.commit()
         finally:
             conn.close()
@@ -1211,6 +1213,10 @@ def process_outbox(*, ids: Iterable[int] | None = None, limit: int = 20, now: in
                     raise creds_cache["error"]
                 msg = build_message(to=rcpt, subject=str(row["subject"]), text=text, html=body_html,
                                     message_id=str(row["message_id"]), settings=settings)
+                # Record only a one-way content fingerprint; never persist a
+                # transient login code or its body for this purpose.
+                mailidentity.bind(conn, "*notification*", str(row["message_id"]).strip("<>"), msg.as_bytes())
+                conn.commit()
                 _deliver(settings, creds_cache["creds"], msg, rcpt)
             except MailError as ex:
                 attempts = int(row["attempts"] or 0) + 1
