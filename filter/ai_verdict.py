@@ -896,6 +896,38 @@ def suspect_hit(settings: dict[str, Any], sc: Any) -> bool:
     return lo <= final < low and bool(frozenset(sc.names or ()) & SUSPECT_SYMBOLS)
 
 
+# 2.20: caught mail just over the threshold (what 'Tjek disse' offers for
+# its score alone) also gets the AI's opinion. It is only recorded
+# (applied='review'): never points, never a move or a release. A sure spam
+# or phishing verdict leaves it out of 'Tjek disse' (judged.ai_sure_spam),
+# a sure 'ham' gives it the reason "AI'en mener, den er ægte".
+REVIEW_MARGIN = 3.0
+REVIEW_ACTIONS = ("pending_move", "flagged", "moved_to_junk")
+REVIEW_QUEUE_MAX = 2
+
+
+def review_candidate(sc: Any, *, our_action: str | None, flags: Iterable[str], prior: Any,
+                     settings: dict[str, Any]) -> bool:
+    if settings.get("mode") not in ("shadow", "on") or settings.get("url") is None:
+        return False
+    if not settings.get("review", True) or our_action not in REVIEW_ACTIONS:
+        return False
+    dec = sc.decision
+    if not dec.spam or dec.rule_hit or dec.verdict or sc.threat or getattr(sc, "aged", False):
+        return False
+    if prior is not None and (_get(prior, "user_verdict") or _get(prior, "our_action")
+                              in ("manual_release", "user_rescued")):
+        return False
+    names = frozenset(sc.names or ())
+    if names & (NAMESPOOF_SYMBOLS | CONTACT_SYMBOLS) or PROTECTED_SYMBOL in names:
+        return False
+    try:
+        final, thr = float(sc.final), float(sc.thr)
+    except (TypeError, ValueError):
+        return False
+    return thr <= final < thr + REVIEW_MARGIN
+
+
 @dataclass
 class Job:
     account: str
@@ -909,6 +941,7 @@ class Job:
     deadline: int
     messages: list = field(default_factory=list, repr=False)   # the prompt (memory only)
     prompt_meta: dict = field(default_factory=dict, repr=False)
+    review: bool = False    # 2.20: caught mail just over the line - verdict only sorts 'Tjek disse'
 
 
 _QUEUE: "queue.Queue[Job]" = queue.Queue(maxsize=QUEUE_MAX)
@@ -943,15 +976,20 @@ def maybe_queue(eng: Any, db: Any, acc: Any, sc: Any, *, msgid: str, uv: int, ui
         return "no_worker"
     settings = load_settings(db.conn)
     why = skip_reason(acc, sc, our_action=our_action, flags=flags, prior=prior, settings=settings)
-    if why is not None:
+    review = why == "decided" and review_candidate(sc, our_action=our_action, flags=flags, prior=prior,
+                                                   settings=settings)
+    if why is not None and not review:
         return why
+    if review and _QUEUE.qsize() > REVIEW_QUEUE_MAX:
+        return "busy"           # inbox mail first: its verdict can still move it in time
     attach = getattr(getattr(sc, "attach", None), "names", None) or ()
     facts = mail_facts(raw, symbols=sc.symbols, attachments=attach)
     grace = int(getattr(acc, "move_grace_seconds", 60) or 0)
     messages = build_messages(facts)
     job = Job(account=db.account, message_id=msgid, uidvalidity=int(uv), uid=int(uid), folder=folder,
               score_before=float(sc.final), threshold=float(sc.thr), queued_at=int(now),
-              deadline=int(now) + max(0, grace), messages=messages, prompt_meta=prompt_identity(messages))
+              deadline=int(now) + max(0, grace), messages=messages, prompt_meta=prompt_identity(messages),
+              review=review)
     try:
         _QUEUE.put_nowait(job)
     except queue.Full:
@@ -981,10 +1019,10 @@ def process(conn: sqlite3.Connection, job: Job, *, now_fn: Any = time.time, wake
     now = int(now_fn())
     if mode == "off":
         return None
-    if mode == "on" and now > job.deadline:
+    if mode == "on" and now > job.deadline and not job.review:
         note_skip(conn, "late", now)
         return None
-    if mode == "shadow" and now > job.queued_at + SHADOW_MAX_AGE_S:
+    if (mode == "shadow" or job.review) and now > job.queued_at + SHADOW_MAX_AGE_S:
         note_skip(conn, "late", now)
         return None
     st = _status(conn)
@@ -1025,7 +1063,9 @@ def process(conn: sqlite3.Connection, job: Job, *, now_fn: Any = time.time, wake
     note_result(conn, status == "ok", done, error)
     pts = points_for(verdict or "", conf or 0.0) if status == "ok" else 0.0
     late = 1 if done > job.deadline else 0
-    if mode == "on" and pts > 0 and not late:
+    if job.review:
+        applied = "review"          # 2.20: only sorts 'Tjek disse'
+    elif mode == "on" and pts > 0 and not late:
         applied = None              # apply_ready takes it
     elif mode == "on" and pts > 0:
         applied = "late"
@@ -1268,7 +1308,8 @@ def evaluation(conn: sqlite3.Connection, *, days: int = 30, now: float | None = 
             "SELECT v.*, m.our_action AS m_action, m.user_verdict AS m_verdict, m.sender AS m_sender, "
             "m.subject AS m_subject, m.our_score AS m_score, m.current_folder AS m_folder, "
             "(m.message_id IS NOT NULL) AS m_known FROM ai_verdicts v LEFT JOIN messages m "
-            "ON m.account=v.account AND m.message_id=v.message_id WHERE v.created_at>=? ORDER BY v.id DESC",
+            "ON m.account=v.account AND m.message_id=v.message_id WHERE v.created_at>=? "
+            "AND COALESCE(v.applied, '') <> 'review' ORDER BY v.id DESC",
             (since,)).fetchall()
     except sqlite3.Error:
         rows = []

@@ -16,6 +16,7 @@ import math
 import re
 import secrets
 import sqlite3
+import contextlib
 import time
 from datetime import datetime
 from typing import Any, Iterable
@@ -1358,6 +1359,72 @@ def provider_review_reasons(r: Any, thr: float, reasons: list[str]) -> list[str]
     return ["Udbyderen lagde den i sin spam-mappe, men filteret ville have ladet den komme igennem"] + reasons
 
 
+# review_reasons() texts that only say "close to the threshold".
+BORDERLINE_PREFIXES = ("Lige over grænsen", "Tæt på grænsen")
+
+
+def _judged() -> Any:
+    import judged  # noqa: PLC0415
+
+    return judged
+
+
+def _judged_spam() -> set[str]:
+    """judged.judged_spam() once per request."""
+    if "_judged_spam" not in g:
+        try:
+            with contextlib.closing(ui._connect()) as conn:
+                g._judged_spam = _judged().judged_spam(conn, int(time.time()))
+        except Exception as ex:  # noqa: BLE001 - never break Fanget spam
+            log.warning("judged senders failed: %s", type(ex).__name__)
+            g._judged_spam = set()
+    return g._judged_spam
+
+
+def _ai_sure() -> set[tuple[str, str]]:
+    """judged.ai_sure_spam() once per request."""
+    if "_ai_sure" not in g:
+        try:
+            with contextlib.closing(ui._connect()) as conn:
+                g._ai_sure = _judged().ai_sure_spam(conn, int(time.time()))
+        except Exception as ex:  # noqa: BLE001
+            log.warning("ai verdicts for Tjek disse failed: %s", type(ex).__name__)
+            g._ai_sure = set()
+    return g._ai_sure
+
+
+PROTECTED_PREFIX = "Sendt til en beskyttet adresse"
+AI_HAM_REASON = "Den lokale AI mener, at den er ægte"
+
+
+def _ai_ham() -> set[tuple[str, str]]:
+    """judged.ai_sure_ham() once per request (2.20)."""
+    if "_ai_ham" not in g:
+        try:
+            with contextlib.closing(ui._connect()) as conn:
+                g._ai_ham = _judged().ai_sure_ham(conn, int(time.time()))
+        except Exception as ex:  # noqa: BLE001
+            log.warning("ai ham verdicts for Tjek disse failed: %s", type(ex).__name__)
+            g._ai_ham = set()
+    return g._ai_ham
+
+
+def _unknown_sender(account: str, sender: Any, message_id: str, ts: Any) -> bool:
+    """judged.unknown_sender() (False if the database cannot be read)."""
+    try:
+        with contextlib.closing(ui._connect()) as conn:
+            return _judged().unknown_sender(conn, account, sender, message_id, ts)
+    except Exception as ex:  # noqa: BLE001 - never break Fanget spam
+        log.warning("unknown sender check failed: %s", type(ex).__name__)
+        return False
+
+
+def review_hidden(selected: str) -> int:
+    """How many mails review_items() left out as already judged."""
+    review_items(selected)
+    return int(g.get(f"_review:{selected}:hidden") or 0)
+
+
 def review_items(selected: str, *, limit: int | None = None) -> list[tuple[Any, list[str]]]:
     """Caught mail of the last 30 days nobody has judged yet that is
     borderline, from a known correspondent, from the own domain or to a
@@ -1383,6 +1450,12 @@ def review_items(selected: str, *, limit: int | None = None) -> list[tuple[Any, 
                     [*qp, *pp, top, int(time.time()) - REVIEW_DAYS * 86400, *sp, REVIEW_LIMIT])
     items: list[tuple[Any, list[str]]] = []
     known_by: dict[str, dict[str, int]] = {}
+    # 2.19.1: a borderline-only mail from a sender a person already called
+    # spam is left out (judged.py) unless the page asks for all (?tjek=alle).
+    show_all = request.args.get("tjek") == "alle"
+    judged = set() if show_all else _judged_spam()
+    ai_sure = set() if show_all else _ai_sure()
+    hidden = 0
     for r in rows:
         account = str(r["account"])
         acc = accounts.get(account)
@@ -1396,8 +1469,31 @@ def review_items(selected: str, *, limit: int | None = None) -> list[tuple[Any, 
         reasons = review_reasons(r, acc, thr, known_by[account])
         if str(r["our_action"]) in PROVIDER_ACTIONS:
             reasons = provider_review_reasons(r, thr, reasons)
+        borderline = bool(reasons) and all(x.startswith(BORDERLINE_PREFIXES) for x in reasons)
+        ai_ham = borderline and (account, str(r["message_id"])) in _ai_ham()
+        if borderline and not show_all:
+            # 2.19.2: also obvious spam - the AI is sure, or a first mail
+            # from an unknown sender without DMARC or with a spam sign.
+            # 2.20: the AI calling it legitimate keeps it on the list.
+            parsed = kit.parse_symbols(r["symbols"])
+            names = {s["n"] for s in parsed}
+            jd = _judged()
+            if (judged and jd.already_judged(r["sender"], judged)) or (not ai_ham and (jd.obvious_spam(
+                    names, (account, str(r["message_id"])) in ai_sure, bayes=jd.bayes_of(parsed)) or (
+                    jd.obvious_spam(names, False, unknown=True, bayes=jd.bayes_of(parsed))
+                    and _unknown_sender(account, r["sender"], str(r["message_id"]), r["ts"])))):
+                hidden += 1
+                continue
+        if ai_ham:
+            reasons = [*reasons, AI_HAM_REASON]
+        elif reasons and not show_all and all(x.startswith(PROTECTED_PREFIX) for x in reasons):
+            # 2.19.3: only 'sent to a protected address', far over the line.
+            if _judged().protected_hidden({s["n"] for s in kit.parse_symbols(r["symbols"])}, r["our_score"], thr):
+                hidden += 1
+                continue
         if reasons:
             items.append((r, reasons))
+    setattr(g, cache_key + ":hidden", hidden)
     setattr(g, cache_key, items)
     return items[:limit] if limit else items
 
@@ -1459,10 +1555,33 @@ def review_row(r: Any, reasons: list[str], thresholds: dict[str, float], *, show
             + f'<div class="review-actions">{btns}</div>{swipe}</li>')
 
 
+def _review_hidden_note(selected: str, here: str) -> str:
+    """2.19.1: 'N mails ... vises ikke · Vis dem alligevel' (or 'Skjul dem igen')."""
+    sep = "&" if "?" in here else "?"
+    if request.args.get("tjek") == "alle":
+        base = re.sub(r"[?&]tjek=alle", "", here) or "/spam"
+        return (f'<p class="review-hidden faint small">Viser også de mails, der næsten sikkert er spam. '
+                f'<a href="{h(base)}#tjek">Skjul dem igen</a></p>')
+    n = review_hidden(selected)
+    if not n:
+        return ""
+    them = "den" if n == 1 else "dem"
+    return (f'<p class="review-hidden faint small">{_n(n, "mail", "mails")} vises ikke, fordi {them} næsten sikkert er spam: '
+            'afsenderen er kaldt spam før, AI\'en er sikker, eller det er en ukendt afsender med faretegn. '
+            f'{"Den" if n == 1 else "De"} ligger i Spamfilter-mappen. '
+            f'<a href="{h(here + sep + "tjek=alle")}#tjek">Vis {them} alligevel</a></p>')
+
+
 def _review_section(selected: str, thresholds: dict[str, float], new_since: int | None, here: str) -> str:
     items = review_items(selected)
+    note = _review_hidden_note(selected, here)
     if not items:
-        return ""
+        if not note:
+            return ""
+        return (f'<section class="card review-card review-card-empty" id="tjek" aria-labelledby="tjek-title">'
+                f'<div class="review-head"><span class="review-icon">{kit.icon("eye")}</span><div>'
+                f'<h2 class="card-title" id="tjek-title">Tjek disse <span class="badge tone-ok">0</span></h2>'
+                f'{note}</div></div></section>')
     shown = items[:8 if ui.is_admin() else 3]
     more = len(items) - len(shown)
     multi = len(_accounts()) > 1
@@ -1483,7 +1602,7 @@ def _review_section(selected: str, thresholds: dict[str, float], new_since: int 
             f'<div class="review-head"><span class="review-icon">{kit.icon("eye")}</span><div>'
             f'<h2 class="card-title" id="tjek-title">Tjek disse <span class="badge tone-info">{kit.fmt_int(len(items))}</span></h2>'
             '<p class="card-sub">Måske ikke spam. Et hurtigt kig her fanger de fleste fejl – resten er næsten '
-            'altid ægte spam.</p></div></div>'
+            f'altid ægte spam.</p>{note}</div></div>'
             f'{head}<ul class="review-list" data-list>{rows}</ul>{foot}{bulk}</section>')
 
 
@@ -3332,6 +3451,33 @@ def _render_rows(keys: Iterable[str], view: str) -> dict[str, str | None]:
     return out
 
 
+def _same_sender_review_keys(keys: list[str], limit: int = 200) -> list[str]:
+    """Row keys of unjudged caught mail (last REVIEW_DAYS) from the same
+    sender (judged.sender_key) as the judged mails, in mailboxes the user
+    may see."""
+    want: set[str] = set()
+    for k in keys:
+        parsed = _parse_key(k)
+        if parsed is None:
+            continue
+        row = ui.query("SELECT sender FROM messages WHERE account=? AND message_id=?", list(parsed))
+        sk = _judged().sender_key(row[0]["sender"]) if row else None
+        if sk:
+            want.add(sk)
+    if not want:
+        return []
+    q, qp = _in(REVIEW_ACTIONS)
+    out = []
+    for r in ui.query(f"SELECT account, message_id, sender FROM messages WHERE our_action IN {q} "
+                      f"AND user_verdict IS NULL AND {TS} >= ? ORDER BY {TS} DESC LIMIT 2000",
+                      [*qp, int(time.time()) - REVIEW_DAYS * 86400]) or []:
+        if ui.can_access(str(r["account"])) and _judged().sender_key(r["sender"]) in want:
+            out.append(_key(str(r["account"]), str(r["message_id"])))
+            if len(out) >= limit:
+                break
+    return out
+
+
 def _updated_rows(results: list[dict], view: str, action: str) -> dict[str, str | None]:
     """Fresh HTML (or None = remove) for each touched row of a list view.
     'review' ('Tjek disse' on Fanget spam): the judged mail leaves the
@@ -3342,6 +3488,11 @@ def _updated_rows(results: list[dict], view: str, action: str) -> dict[str, str 
             key = res.get("key")
             if key and (res.get("ok") or res.get("gone")):
                 out[f"review:{key}"] = None
+        if action in ("learn_spam", "mark_spam"):
+            # 2.19.1: the other borderline mails from the same sender leave
+            # 'Tjek disse' at once (review_items hides them from now on).
+            for k in _same_sender_review_keys([str(r["key"]) for r in results if r.get("ok") and r.get("key")]):
+                out.setdefault(f"review:{k}", None)
         out.update(_updated_rows(results, "spam", action))
         return out
     if view not in LIST_VIEWS:

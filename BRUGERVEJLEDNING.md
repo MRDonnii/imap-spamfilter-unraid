@@ -214,6 +214,18 @@ Oversigten viser også, hvor mange der venter i Tjek disse.
 
 Farlige mails og mails, der er fanget ved genscanning, vises aldrig under Tjek disse.
 
+Næsten sikker spam vises heller ikke (2.19–2.20), så listen kun holder det, der kan være en god mail:
+
+- afsendere, som du eller en anden i husstanden allerede har kaldt spam
+- mails, som den lokale AI med høj sikkerhed kalder spam eller phishing
+- mails fra en afsender, der aldrig har fået en mail igennem til indbakken før, når den ikke består DMARC, har et
+  faretegn, et link på en spamliste, eller Bayes-filteret er næsten sikkert
+- mails, der kun står der, fordi de gik til en beskyttet adresse, når scoren er mindst 10 over grænsen
+
+Kortet siger, hvor mange der er skjult. **Vis dem alligevel** viser dem, og de ligger stadig i Spamfilter-mappen.
+Fangede mails lige over grænsen får også den lokale AI's vurdering. Den flytter eller frigiver aldrig noget, men
+mener den, at mailen er ægte, står der "Den lokale AI mener, at den er ægte", og mailen bliver på listen.
+
 ---
 
 ## Træk mails ind og ud af Spamfilter i mailprogrammet

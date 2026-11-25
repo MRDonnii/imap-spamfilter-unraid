@@ -1,5 +1,55 @@
 # Ændringslog
 
+## 2.20.0 — 2026-11-25 (beta)
+
+- **Den lokale AI vurderer også fangede mails lige over grænsen:** Før så AI'en kun mails lige under grænsen i
+  indbakken (33 af 668 fangede mails på 30 dage havde en vurdering). Nu får fangede mails op til 3 over grænsen
+  også en vurdering, når afsenderen ikke er kendt, beskyttet eller blokeret. Vurderingen flytter eller frigiver
+  aldrig noget og giver ingen point: Er AI'en sikker på spam eller phishing, vises mailen ikke under Tjek disse;
+  mener den, at mailen er ægte, bliver den på listen med grunden "Den lokale AI mener, at den er ægte". Indbakkens
+  mails går altid først i køen, og vurderingerne tæller ikke med i AI-sidens tal for Prøv/Til.
+- Brugervejledningen forklarer, hvad Tjek disse skjuler, og hvordan man ser det alligevel.
+
+## 2.19.4 — 2026-11-25 (beta)
+
+- **Tjek disse fanger også spam fra ukendte afsendere med gyldig DMARC:** En spammers eget domæne består ofte
+  DMARC. En mail fra en afsender, der aldrig har fået en mail igennem før, vises nu heller ikke, når den har et link
+  på en spamliste, rspamd's phishing-tegn (linktekst og adresse passer ikke sammen), eller når Bayes-filteret, der
+  har lært af jeres egne valg, er næsten sikker (mindst 4 af 5,1). Målt på 90 dage: 16 spammails færre, ingen gode.
+
+## 2.19.3 — 2026-11-25 (beta)
+
+- **Færre spammails under Tjek disse:** Mærket "første mail fra en ukendt afsender" forsvandt, når en mail blev
+  scannet igen, så to ud af tre fangede mails manglede det, og tydelig spam blev stadig vist. Nu spørger listen
+  selv databasen: er der aldrig kommet en mail fra afsenderen igennem til indbakken før, og består den ikke
+  DMARC eller har et faretegn, vises den ikke. Målt på 90 dages rigtig post: 142 spammails færre på listen, og
+  ingen af de 18 mails, som folk frigav, ville være skjult.
+- **Beskyttede adresser:** En mail, der kun står på listen, fordi den gik til en beskyttet adresse, vises ikke, når
+  scoren er mindst 10 over grænsen (fx score 33 med Spamhaus, kendt spamindhold og SPF-fejl). Telefonbeskeden følger
+  de samme regler, og **Vis dem alligevel** viser alt.
+
+## 2.19.2 — 2026-11-25 (beta)
+
+- **Tjek disse viser kun det, der kan være en god mail:** En grænsemail vises ikke længere, når den næsten sikkert
+  er spam: AI'en har kaldt den spam eller phishing med høj sikkerhed, eller det er første mail fra en helt ukendt
+  afsender, som enten ikke består DMARC eller har et faretegn (lokkeemne, snydetegn, nyt domæne, misbrugt
+  topdomæne, falsk brand, kendt spamindhold). Målt på 3 ugers rigtig post: listen ville være faldet fra 69 til 20
+  mails, og alle 10 mails, som folk faktisk frigav, ville stadig være vist (de kom alle fra afsendere, man havde fået
+  mail fra før). En ny afsender med DMARC og uden faretegn (fx en ny webshop) vises som før.
+- Kortet siger, hvor mange der er skjult og hvorfor, med **Vis dem alligevel**. Telefonbeskeden springer dem også over.
+
+## 2.19.1 — 2026-11-25 (beta)
+
+- **Tjek disse viser ikke længere afsendere, du allerede har kaldt spam:** En mail, der kun står under Tjek disse,
+  fordi scoren ligger tæt på grænsen, vises ikke, når en person tidligere har kaldt samme afsender spam ("Det er
+  spam", "Lær som spam" eller en flytning til Junk) og ingen har frigivet mail derfra. Afsenderen er domænet
+  (fx en kampagne med skiftende adresser på samme domæne); for gratis mailadresser kun den præcise adresse. Mails
+  med en rigtig grund til et ekstra kig (kendt kontakt, svar, beskyttet adresse, eget domæne) vises som før.
+  Kortet siger, hvor mange der er skjult, med **Vis dem alligevel**. Mailene ligger stadig i Spamfilter-mappen.
+- **Det er spam rydder op med det samme:** Trykker man Det er spam under Tjek disse, forsvinder de andre mails fra
+  samme afsender også fra listen.
+- **Telefonbeskeden "Nye mails under Tjek disse"** springer de samme mails over.
+
 ## 2.19.0 — 2026-11-23 (beta)
 
 - Automatisk metadataopfølgning på seneste eksplicitte spamrettelser i
