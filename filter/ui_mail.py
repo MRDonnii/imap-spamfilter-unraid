@@ -1394,6 +1394,19 @@ def _ai_sure() -> set[tuple[str, str]]:
 
 
 PROTECTED_PREFIX = "Sendt til en beskyttet adresse"
+AI_HAM_REASON = "Den lokale AI mener, at den er ægte"
+
+
+def _ai_ham() -> set[tuple[str, str]]:
+    """judged.ai_sure_ham() once per request (2.20)."""
+    if "_ai_ham" not in g:
+        try:
+            with contextlib.closing(ui._connect()) as conn:
+                g._ai_ham = _judged().ai_sure_ham(conn, int(time.time()))
+        except Exception as ex:  # noqa: BLE001
+            log.warning("ai ham verdicts for Tjek disse failed: %s", type(ex).__name__)
+            g._ai_ham = set()
+    return g._ai_ham
 
 
 def _unknown_sender(account: str, sender: Any, message_id: str, ts: Any) -> bool:
@@ -1456,18 +1469,23 @@ def review_items(selected: str, *, limit: int | None = None) -> list[tuple[Any, 
         reasons = review_reasons(r, acc, thr, known_by[account])
         if str(r["our_action"]) in PROVIDER_ACTIONS:
             reasons = provider_review_reasons(r, thr, reasons)
-        if reasons and not show_all and all(x.startswith(BORDERLINE_PREFIXES) for x in reasons):
+        borderline = bool(reasons) and all(x.startswith(BORDERLINE_PREFIXES) for x in reasons)
+        ai_ham = borderline and (account, str(r["message_id"])) in _ai_ham()
+        if borderline and not show_all:
             # 2.19.2: also obvious spam - the AI is sure, or a first mail
             # from an unknown sender without DMARC or with a spam sign.
+            # 2.20: the AI calling it legitimate keeps it on the list.
             parsed = kit.parse_symbols(r["symbols"])
             names = {s["n"] for s in parsed}
             jd = _judged()
-            if (judged and jd.already_judged(r["sender"], judged)) or jd.obvious_spam(
+            if (judged and jd.already_judged(r["sender"], judged)) or (not ai_ham and (jd.obvious_spam(
                     names, (account, str(r["message_id"])) in ai_sure, bayes=jd.bayes_of(parsed)) or (
                     jd.obvious_spam(names, False, unknown=True, bayes=jd.bayes_of(parsed))
-                    and _unknown_sender(account, r["sender"], str(r["message_id"]), r["ts"])):
+                    and _unknown_sender(account, r["sender"], str(r["message_id"]), r["ts"])))):
                 hidden += 1
                 continue
+        if ai_ham:
+            reasons = [*reasons, AI_HAM_REASON]
         elif reasons and not show_all and all(x.startswith(PROTECTED_PREFIX) for x in reasons):
             # 2.19.3: only 'sent to a protected address', far over the line.
             if _judged().protected_hidden({s["n"] for s in kit.parse_symbols(r["symbols"])}, r["our_score"], thr):

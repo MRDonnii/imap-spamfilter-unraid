@@ -1283,6 +1283,7 @@ def on_review(conn: sqlite3.Connection, acc: Any, *, now: int | None = None) -> 
         cache: dict[str, int] = {}
         judged_keys: set[str] | None = None
         ai_sure: set[tuple[str, str]] | None = None
+        ai_ham: set[tuple[str, str]] | None = None
         for r in rows:
             addr = _addr_of(r["sender"])
             if addr and addr not in cache:
@@ -1296,7 +1297,11 @@ def on_review(conn: sqlite3.Connection, acc: Any, *, now: int | None = None) -> 
                 if judged_keys is None:
                     judged_keys = judged.judged_spam(conn, t)
                     ai_sure = judged.ai_sure_spam(conn, t)
+                    ai_ham = judged.ai_sure_ham(conn, t)
                 if judged_keys and judged.already_judged(r["sender"], judged_keys):
+                    continue
+                if (account, str(r["message_id"])) in (ai_ham or set()):
+                    n += 1      # 2.20: the AI calls it legitimate - worth a look
                     continue
                 names = _symbol_names(r["symbols"])
                 bayes = judged.bayes_of(_symbol_list(r["symbols"]))

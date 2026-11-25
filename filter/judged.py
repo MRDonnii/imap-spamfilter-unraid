@@ -111,6 +111,17 @@ URL_SIGNS = frozenset({
 BAYES_SURE = 4.0
 
 
+def ai_sure_ham(conn: sqlite3.Connection, now: int, *, days: int = 31) -> set[tuple[str, str]]:
+    """(account, message_id) the local AI called legitimate with confidence
+    >= AI_SURE (2.20). Never raises."""
+    try:
+        return {(str(a), str(m)) for a, m in conn.execute(
+            "SELECT account, message_id FROM ai_verdicts WHERE verdict='ham' "
+            "AND confidence >= ? AND created_at >= ?", (AI_SURE, now - days * 86400))}
+    except (sqlite3.Error, TypeError, ValueError):
+        return set()
+
+
 def obvious_spam(names: Iterable[str], ai_sure: bool, *, unknown: bool = False, bayes: float = 0.0) -> str:
     """Why a borderline-only mail is obvious spam ('' = offer it): the AI is
     sure, or it is from an unknown sender (TH_FIRST_CONTACT, or `unknown`

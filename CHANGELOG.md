@@ -1,5 +1,15 @@
 # Ændringslog
 
+## 2.20.0 — 2026-11-25 (beta)
+
+- **Den lokale AI vurderer også fangede mails lige over grænsen:** Før så AI'en kun mails lige under grænsen i
+  indbakken (33 af 668 fangede mails på 30 dage havde en vurdering). Nu får fangede mails op til 3 over grænsen
+  også en vurdering, når afsenderen ikke er kendt, beskyttet eller blokeret. Vurderingen flytter eller frigiver
+  aldrig noget og giver ingen point: Er AI'en sikker på spam eller phishing, vises mailen ikke under Tjek disse;
+  mener den, at mailen er ægte, bliver den på listen med grunden "Den lokale AI mener, at den er ægte". Indbakkens
+  mails går altid først i køen, og vurderingerne tæller ikke med i AI-sidens tal for Prøv/Til.
+- Brugervejledningen forklarer, hvad Tjek disse skjuler, og hvordan man ser det alligevel.
+
 ## 2.19.4 — 2026-11-25 (beta)
 
 - **Tjek disse fanger også spam fra ukendte afsendere med gyldig DMARC:** En spammers eget domæne består ofte

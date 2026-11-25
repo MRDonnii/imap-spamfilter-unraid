@@ -869,3 +869,50 @@ def test_ai_policy_trace_replays_actual_application_without_mail_content(eng, mo
     assert row and 'PRIVATE TRACE BODY' not in row[0]
     result = decisiontrace.replay(row[0])
     assert result['action'] == 'pending_move' and result['reason'] == 'ai_score'
+
+
+# ----- 2.20: caught mail just over the line - only sorts 'Tjek disse' --------
+
+
+@pytest.mark.parametrize("kw,action,ok", [
+    ({"spam": True, "final": 9.0}, "pending_move", True),
+    ({"spam": True, "final": 8.0}, "moved_to_junk", True),
+    ({"spam": True, "final": 10.99}, "flagged", True),
+    ({"spam": True, "final": 11.0}, "pending_move", False),          # far over: obvious
+    ({"spam": True, "final": 9.0}, "none", False),
+    ({"spam": True, "final": 9.0, "rule_hit": "block:2"}, "pending_move", False),
+    ({"spam": True, "final": 9.0, "threat": "phish"}, "pending_move", False),
+    ({"spam": True, "final": 9.0, "names": {"TH_KNOWN_CONTACT"}}, "pending_move", False),
+    ({"spam": True, "final": 9.0, "names": {"TH_PROTECTED_RCPT"}}, "pending_move", False),
+    ({"spam": True, "final": 9.0, "aged": True}, "pending_move", False),
+])
+def test_review_candidates(kw, action, ok):
+    s = ai.normalize_settings({"mode": "on", "url": URL})
+    assert ai.review_candidate(_sc(**kw), our_action=action, flags=(), prior=None, settings=s) is ok
+    off = ai.normalize_settings({"mode": "off", "url": URL})
+    assert ai.review_candidate(_sc(**kw), our_action=action, flags=(), prior=None, settings=off) is False
+
+
+def test_caught_mail_just_over_is_judged_but_never_changed(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode="on")
+    h.deliver("near@x", score=9.0)
+    h.scan()
+    before = h.row("near@x")
+    moves = len(pending(h))
+    assert before["our_action"] == "pending_move" and ai.queue_size() == 1
+    h.advance(300)                                   # after the grace: still judged (not a move)
+    rows, wakes = drain(h)
+    assert rows[0]["applied"] == "review" and rows[0]["verdict"] == "spam" and wakes == []
+    assert apply(h) == 0
+    after = h.row("near@x")
+    assert after["our_score"] == before["our_score"] and "TH_AI_SPAM" not in (after["symbols"] or "")
+    assert len(pending(h)) == moves
+    assert ai.evaluation(h.db.conn, now=h.t)["summary"]["total"] == 0     # not in the Til/Prøv numbers
+
+
+def test_review_jobs_wait_for_inbox_mail(eng, monkeypatch, ollama):
+    h = harness(eng, monkeypatch, mode="on")
+    for i in range(ai.REVIEW_QUEUE_MAX + 2):
+        h.deliver(f"near{i}@x", score=9.0)
+    h.scan()
+    assert ai.queue_size() == ai.REVIEW_QUEUE_MAX + 1

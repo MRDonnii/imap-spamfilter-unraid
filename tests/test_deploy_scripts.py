@@ -79,11 +79,11 @@ def test_shellcheck_clean():
 
 def test_versions_env_pins():
     v = versions()
-    assert v["VERSION"] == "2.19.4"
+    assert v["VERSION"] == "2.20.0"
     # 2.4: AIO_IMAGE is production; FILTER_IMAGE (suffix -filter) is the
     # filter-only image of the 4-container layout (rollback only).
-    assert v["AIO_IMAGE"] == "imap-spamfilter-unraid:2.19.4"
-    assert v["FILTER_IMAGE"] == "imap-spamfilter-unraid:2.19.4-filter"
+    assert v["AIO_IMAGE"] == "imap-spamfilter-unraid:2.20.0"
+    assert v["FILTER_IMAGE"] == "imap-spamfilter-unraid:2.20.0-filter"
     for key in ("REDIS_IMAGE", "RSPAMD_IMAGE", "UNBOUND_IMAGE", "FILTER_BASE_IMAGE"):
         assert re.search(r"@sha256:[0-9a-f]{64}$", v[key]), key
     assert v["ENABLE_FUZZY"] in ("0", "1")
@@ -101,7 +101,7 @@ def test_dockerfile_contract():
     assert re.search(r"^USER 10099:10099$", text, re.M)
     assert ("HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \\\n"
             '    CMD ["python", "/app/healthcheck.py"]') in text
-    assert 'org.opencontainers.image.version="2.19.4-unraid"' in text
+    assert 'org.opencontainers.image.version="2.20.0-unraid"' in text
     ignore = (ROOT / "filter" / "Dockerfile.unraid.dockerignore").read_text()
     assert "test_*.py" in ignore
 
@@ -214,7 +214,7 @@ def test_run_args_filter(host):
     assert "net.unraid.docker.icon=http://192.168.1.10:18080/static/logo.png" in a
     assert f"{host.app}/state:/state" in a and f"{host.app}/config:/config" in a
     assert "AUTOMATIC_RETENTION_ENABLED=0" in a
-    assert a[a.index("--") + 1] == "imap-spamfilter-unraid:2.19.4-filter"
+    assert a[a.index("--") + 1] == "imap-spamfilter-unraid:2.20.0-filter"
 
 
 def test_run_args_infra(host):

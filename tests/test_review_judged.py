@@ -171,3 +171,20 @@ def test_unknown_sender_with_dmarc_but_blocklisted_link_or_sure_bayes_is_obvious
     assert judged.obvious_spam(dmarc | {"RSPAMD_URIBL"}, False, bayes=5.1) == ""        # sender seen before
     assert judged.bayes_of([{"n": "X", "s": 1}, {"n": "BAYES_SPAM", "s": 5.1}]) == 5.1
     assert judged.bayes_of([{"n": "BAYES_HAM", "s": -3}]) == 0.0 and judged.bayes_of(None) == 0.0
+
+
+def test_ai_calling_it_legitimate_keeps_it_on_the_list_with_the_reason(tmp_path, monkeypatch):
+    e = make_admin_env(tmp_path, monkeypatch)
+    insert_message(e.conn, "bynet", "<h@x>", sender="a@ukendt.example", subject="AI mener ægte", **CAUGHT)
+    insert_message(e.conn, "bynet", "<u@x>", sender="a@ukendt2.example", subject="Ingen AI", **CAUGHT)
+    insert_message(e.conn, "bynet", "<j0@x>", sender="x@zoo.example", user_verdict="spam", **CAUGHT)
+    insert_message(e.conn, "bynet", "<j@x>", sender="y@zoo.example", subject="Allerede spam", **CAUGHT)
+    for mid in ("<h@x>", "<j@x>"):
+        e.conn.execute("INSERT INTO ai_verdicts(account, message_id, mode, status, verdict, confidence, created_at) "
+                       "VALUES('bynet', ?, 'on', 'ok', 'ham', 0.9, ?)", (mid, NOW))
+    e.conn.commit()
+    c = e.app.test_client()
+    assert login(c).status_code == 302
+    review = _review(c.get("/spam").get_data(as_text=True))
+    assert "AI mener ægte" in review and ui_mail.AI_HAM_REASON in review
+    assert "Ingen AI" not in review and "Allerede spam" not in review      # a person's verdict wins
