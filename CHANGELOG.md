@@ -1,5 +1,17 @@
 # Ændringslog
 
+## 2.19.1 — 2026-11-25 (beta)
+
+- **Tjek disse viser ikke længere afsendere, du allerede har kaldt spam:** En mail, der kun står under Tjek disse,
+  fordi scoren ligger tæt på grænsen, vises ikke, når en person tidligere har kaldt samme afsender spam ("Det er
+  spam", "Lær som spam" eller en flytning til Junk) og ingen har frigivet mail derfra. Afsenderen er domænet
+  (fx en kampagne med skiftende adresser på samme domæne); for gratis mailadresser kun den præcise adresse. Mails
+  med en rigtig grund til et ekstra kig (kendt kontakt, svar, beskyttet adresse, eget domæne) vises som før.
+  Kortet siger, hvor mange der er skjult, med **Vis dem alligevel**. Mailene ligger stadig i Spamfilter-mappen.
+- **Det er spam rydder op med det samme:** Trykker man Det er spam under Tjek disse, forsvinder de andre mails fra
+  samme afsender også fra listen.
+- **Telefonbeskeden "Nye mails under Tjek disse"** springer de samme mails over.
+
 ## 2.19.0 — 2026-11-23 (beta)
 
 - Automatisk metadataopfølgning på seneste eksplicitte spamrettelser i

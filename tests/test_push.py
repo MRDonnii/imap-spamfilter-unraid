@@ -646,7 +646,7 @@ def test_review_counts_only_maybe_legit_mail_and_batches_per_30_min(penv):
     msg(penv, "<own@x>", score=30.0, sender="Kollega <k@example.com>")
     msg(penv, "<spam@x>", score=30.0)                                      # clear spam: no
     msg(penv, "<threat@x>", score=9.0, threat="phish")                     # dangerous: never "Tjek disse"
-    msg(penv, "<judged@x>", score=9.0, verdict="spam")
+    msg(penv, "<judged@x>", score=9.0, verdict="spam", sender="Anden <a@andet.example>")
     msg(penv, "<inbox@x>", score=2.0, action="none", folder="INBOX", sender="Ven <ven@familie.example>")
     assert push.on_review(penv.conn, acc, now=NOW) == 1                    # anna (bynet) only
     penv.run(NOW)
@@ -808,3 +808,14 @@ def test_suite_never_reaches_a_real_push_service(penv):
     dev = device()
     res = webpush.send(dev.endpoint, dev.p256dh, dev.auth, b"{}", key=push.vapid_key(), subject="mailto:a@b.dk")
     assert res.outcome == "retry" and res.status == 0
+
+
+def test_review_skips_borderline_mail_from_a_sender_already_called_spam(penv):
+    """2.19.1 (judged.py): no phone ping for the next zoo-friends mail once a
+    person has called the sender spam; a known contact still counts."""
+    penv.sub("anna", prefs={"threat": False, "review": True, "problem": False})
+    msg(penv, "<old@x>", score=9.0, verdict="spam", sender="Zoo <abc@zoo-friends.example>", ts=NOW - 86400)
+    msg(penv, "<new@x>", score=9.0, sender="Zoo <xyz@zoo-friends.example>")
+    assert push.on_review(penv.conn, Acc(), now=NOW) == 0
+    msg(penv, "<new2@x>", score=9.0, sender="Zoo <q@zoo-friends.example>", symbols=["TH_KNOWN_CONTACT"], ts=NOW + 10)
+    assert push.on_review(penv.conn, Acc(), now=NOW + push.REVIEW_BATCH) == 1

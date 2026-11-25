@@ -1168,6 +1168,14 @@ def _known_count(conn: sqlite3.Connection, account: str, addr: str, now: int) ->
     return sum(1 for r in rows if _addr_of(r[0]) == addr)
 
 
+def review_borderline_only(row: Any, *, user: str, threshold: float, known: int) -> bool:
+    """review_qualifies() only because the score is close to the threshold
+    (2.19.1: such a mail from a sender a person already called spam is not
+    news - judged.py)."""
+    return (review_qualifies(row, user=user, threshold=threshold, known=known)
+            and not review_qualifies(row, user=user, threshold=float("-inf"), known=known))
+
+
 def review_qualifies(row: Any, *, user: str, threshold: float, known: int) -> bool:
     """The same test as ui_mail.review_reasons() (non-empty): a mail the
     filter caught that may be legitimate. tests/test_push.py keeps the two
@@ -1245,12 +1253,22 @@ def on_review(conn: sqlite3.Connection, acc: Any, *, now: int | None = None) -> 
         user = str(getattr(acc, "user", "") or "")
         n = 0
         cache: dict[str, int] = {}
+        judged_keys: set[str] | None = None
         for r in rows:
             addr = _addr_of(r["sender"])
             if addr and addr not in cache:
                 cache[addr] = _known_count(conn, account, addr, t)
-            if review_qualifies(r, user=user, threshold=thr, known=cache.get(addr, 0)):
-                n += 1
+            known = cache.get(addr, 0)
+            if not review_qualifies(r, user=user, threshold=thr, known=known):
+                continue
+            if review_borderline_only(r, user=user, threshold=thr, known=known):
+                import judged  # noqa: PLC0415
+
+                if judged_keys is None:
+                    judged_keys = judged.judged_spam(conn, t)
+                if judged_keys and judged.already_judged(r["sender"], judged_keys):
+                    continue
+            n += 1
         with _tx(conn):
             _mark(conn, "review", account, [str(r["message_id"]) for r in rows], t)
             if n:
