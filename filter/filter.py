@@ -66,7 +66,7 @@ if __name__ == "__main__":
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.20.0"
+VERSION = "2.20.1"
 SCORE_VERSION = 2  # A4: scores computed with the 2.0 sender context
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "/app/accounts.yml"))
@@ -3111,6 +3111,7 @@ def message_id_searchable(msgid: str | None) -> bool:
 
 
 _HDR_MSGID = b"BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]"
+_HDR_MSGID_FROM = b"BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM)]"
 
 
 def _header_bytes(data: dict | None) -> bytes:
@@ -3143,18 +3144,25 @@ def find_uids_by_message_id(client: IMAPClient, message_id: str, *,
     as one; only the newest (highest UID) is returned, the others are left
     alone. Different deliveries with the same Message-ID stay distinct."""
     identity = None
+    legacy: tuple[str, int] | None = None
     if Path(DB_PATH).exists():
         conn = sqlite3.connect(DB_PATH, timeout=10)
         try:
             identity = mailidentity.binding(conn, getattr(client, "_sf_account", None), message_id)
             account = getattr(client, "_sf_account", None)
-            if identity is None and account is not None and conn.execute(
-                    'SELECT 1 FROM messages WHERE account=? AND message_id=?',
-                    (account, message_id)).fetchone():
+            row = (conn.execute('SELECT sender, size FROM messages WHERE account=? AND message_id=?',
+                                (account, message_id)).fetchone()
+                   if identity is None and account is not None else None)
+            if row is not None:
                 # Legacy verdicts/learns cannot select a new payload by ID
-                # alone. Find-mail can bind a concrete, explicitly selected
-                # copy; queued moves retain their original UID proof.
-                return []
+                # alone. 2.20.1: a row scanned before the identity table
+                # (most caught mail in 'Tjek disse') is proven by the sender
+                # address and exact size recorded at scan time - a new mail
+                # reusing the ID must match both. Without them: nothing.
+                sender = (parseaddr(str(row[0] or ""))[1] or "").strip().lower()
+                if not sender or row[1] is None:
+                    return []
+                legacy = (sender, int(row[1]))
         except sqlite3.OperationalError:
             pass  # rollback / test databases without the additive table
         finally:
@@ -3198,8 +3206,9 @@ def find_uids_by_message_id(client: IMAPClient, message_id: str, *,
     cands = sorted({int(u) for u in client.search(crit)})
     if not cands:
         return []
-    items = ([_HDR_MSGID, b"INTERNALDATE", b"RFC822.SIZE", b"FLAGS"] if collapse_copies
-             else [_HDR_MSGID])
+    hdr = _HDR_MSGID_FROM if legacy is not None else _HDR_MSGID
+    items = ([hdr, b"INTERNALDATE", b"RFC822.SIZE", b"FLAGS"] if collapse_copies
+             else [hdr, b"RFC822.SIZE"] if legacy is not None else [hdr])
     out: list[int] = []
     keys: dict[int, tuple] = {}
     live: dict[int, bool] = {}
@@ -3208,6 +3217,10 @@ def find_uids_by_message_id(client: IMAPClient, message_id: str, *,
         for uid in chunk:
             data = fetched.get(uid)
             mid, _subj, _from = parse_envelope(_header_bytes(data))
+            if mid == target and legacy is not None and (
+                    (_from or "").strip().lower() != legacy[0]
+                    or int((data or {}).get(b"RFC822.SIZE") or -1) != legacy[1]):
+                continue
             if mid == target:
                 out.append(uid)
                 if collapse_copies:
