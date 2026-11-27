@@ -220,3 +220,34 @@ def test_legacy_rows_without_content_binding_are_not_header_search_targets(eng, 
         h.db.update_message('legacy-unbound@x', user_verdict='ham')
     h.client.select_folder('INBOX')
     assert eng.find_uids_by_message_id(h.client, 'legacy-unbound@x') == []
+
+
+def _legacy_row(h, msgid, *, sender, size):
+    with h.db.tx():
+        h.db.upsert_message(msgid, 'INBOX', sender, 'old record')
+        h.db.update_message(msgid, size=size)
+
+
+def test_legacy_rows_are_found_when_sender_and_size_match(eng, monkeypatch):
+    # 2.20.1: caught mail scanned before the identity table could never be
+    # released or marked as spam ("findes ikke længere") - it kept coming
+    # back in 'Tjek disse'.
+    h = Harness(eng, monkeypatch)
+    h.client._sf_account = h.acc.name
+    uid = h.deliver('legacy-old@x', sender='News@Shop.example')
+    size = h.client.fetch([uid], [b"RFC822.SIZE"])[uid][b"RFC822.SIZE"]
+    _legacy_row(h, 'legacy-old@x', sender='news@shop.example', size=size)
+    h.client.select_folder('INBOX')
+    assert eng.find_uids_by_message_id(h.client, 'legacy-old@x') == [uid]
+    assert eng.find_uids_by_message_id(h.client, 'legacy-old@x', collapse_copies=False) == [uid]
+
+
+@pytest.mark.parametrize('sender, delta', [('other@shop.example', 0), ('news@shop.example', 1)])
+def test_legacy_rows_reject_a_new_mail_reusing_the_id(eng, monkeypatch, sender, delta):
+    h = Harness(eng, monkeypatch)
+    h.client._sf_account = h.acc.name
+    uid = h.deliver('legacy-reuse@x', sender='news@shop.example')
+    size = h.client.fetch([uid], [b"RFC822.SIZE"])[uid][b"RFC822.SIZE"]
+    _legacy_row(h, 'legacy-reuse@x', sender=sender, size=size + delta)
+    h.client.select_folder('INBOX')
+    assert eng.find_uids_by_message_id(h.client, 'legacy-reuse@x') == []

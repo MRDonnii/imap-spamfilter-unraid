@@ -1989,3 +1989,31 @@ def test_different_fingerprinted_payload_uses_its_own_threat_classification(live
         h.db.upsert_message(key, 'Spamfilter', 'sender@example.org', 'new')
         h.db.update_message(key, scanned_at=int(live.clock.t), threat=None)
     assert services._threat_of(h.db.conn, h.acc.name, key) == (None, None)
+
+
+@pytest.mark.parametrize("action", ["learn_spam", "mark_spam"])
+def test_spam_on_a_known_mail_that_cannot_be_found_still_records_the_verdict(eng, imap, action):
+    # 2.20.1: a mail rewritten by the person's mail client (or deleted) kept
+    # coming back in 'Tjek disse' because 'Det er spam' failed as not_found.
+    now = int(time.time())
+    with eng.db() as conn:
+        conn.execute("INSERT INTO messages(account, message_id, first_seen, last_seen, current_folder, "
+                     "our_action, sender, subject) VALUES('acc','rewritten@x',?,?,'Junk','moved_to_junk',"
+                     "'a@b.example','Hej')", (now, now))
+    res = services.mail_action("acc", ["rewritten@x", "unknown@x"], action, "anna", engine=eng)
+    assert [(r["ok"], r["code"]) for r in res] == [(True, "verdict_only"), (False, "not_found")]
+    r = row(eng, "rewritten@x")
+    assert r["user_verdict"] == "spam" and r["verdict_by"] == "anna" and r["current_folder"] == "Junk"
+    assert row(eng, "unknown@x") is None
+    assert eng.move_calls == [] and eng.learn_calls == [] and imap.writes == []
+    assert events(eng, "verdict_only_spam")
+
+
+def test_release_of_a_known_mail_that_cannot_be_found_records_nothing(eng, imap):
+    now = int(time.time())
+    with eng.db() as conn:
+        conn.execute("INSERT INTO messages(account, message_id, first_seen, last_seen, current_folder, "
+                     "our_action, sender) VALUES('acc','rewritten@x',?,?,'Junk','moved_to_junk','a@b.example')",
+                     (now, now))
+    res = services.mail_action("acc", ["rewritten@x"], "release", "anna", engine=eng)
+    assert res[0]["code"] == "not_found" and row(eng, "rewritten@x")["user_verdict"] is None

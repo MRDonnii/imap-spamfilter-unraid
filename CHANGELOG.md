@@ -1,6 +1,18 @@
 # Ændringslog
 
-## 2.20.0 — 2026-11-25 (beta)
+## 2.20.1 — 2026-11-27 (beta)
+
+- **"Det er spam" og "Frigiv" virker igen på ældre mails:** Siden 2.15 kunne mails, der blev scannet før
+  mail-fingeraftrykket fandtes (de fleste fangede mails under Tjek disse), hverken markeres som spam eller frigives.
+  Filteret svarede "Mailen findes ikke længere i postkassen", selv om mailen lå der, og ved næste oprydning kom den
+  tilbage på listen. Nu kendes en sådan mail på afsenderen og den præcise størrelse fra scanningen; en ny mail, der
+  genbruger samme Message-ID, skal passe på begge og bliver ellers ikke rørt.
+- **"Det er spam" huskes, selv om mailen ikke kan findes sikkert:** Er mailen slettet, eller har mailprogrammet
+  skrevet den om (fx Outlook, når mailen ligger i Uønsket/Junk), gemmes markeringen alligevel. Mailen vises ikke igen
+  under Tjek disse, og afsenderen tæller som kaldt spam; filteret lærer bare ikke af netop den mail. "Frigiv" gør
+  aldrig dette – en mail, der ikke kan findes sikkert, frigives ikke.
+
+## 2.20.0 — 2026-11-25
 
 - **Den lokale AI vurderer også fangede mails lige over grænsen:** Før så AI'en kun mails lige under grænsen i
   indbakken (33 af 668 fangede mails på 30 dage havde en vurdering). Nu får fangede mails op til 3 over grænsen

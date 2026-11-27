@@ -672,6 +672,32 @@ def _record_verdict(db: Any, eng: Any, acc: Any, mid: str, *, folder: str, verdi
             log.warning("bump_stat(%s) failed: %s", stat, type(ex).__name__)
 
 
+VERDICT_ONLY_TEXT = ("Markeret som spam. Mailen kunne ikke findes sikkert i postkassen, så filteret har ikke "
+                     "lært af netop den – men den bliver ikke vist igen.")
+
+
+def _spam_verdict_only(db: Any, acc: Any, mid: str, actor: str) -> dict[str, Any] | None:
+    """2.20.1: 'Det er spam' on a mail the filter knows but cannot find
+    safely in the mailbox (deleted, or rewritten by a mail client such as
+    Outlook so its identity no longer matches) still records the person's
+    verdict: the mail leaves 'Tjek disse' and the sender counts as called
+    spam. Nothing is moved or learned. Release never does this. None when
+    the filter has no row for the mail."""
+    try:
+        row = db.conn.execute("SELECT user_verdict FROM messages WHERE account=? AND message_id=?",
+                              (acc.name, mid)).fetchone()
+        if row is None:
+            return None
+        with db.tx():
+            db.conn.execute("UPDATE messages SET user_verdict='spam', verdict_at=?, verdict_by=? "
+                            "WHERE account=? AND message_id=?", (int(time.time()), actor or "webui", acc.name, mid))
+            db.log_event("verdict_only_spam", mid, detail=f"actor={actor}" if actor else None)
+    except sqlite3.Error as ex:
+        log.warning("verdict-only spam failed: %s", type(ex).__name__)
+        return None
+    return _res(mid, True, "verdict_only", VERDICT_ONLY_TEXT)
+
+
 def _do_release(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, Any],
                 caps: frozenset, mid: str, actor: str, *, threat: str | None = None) -> dict[str, Any]:
     folder, uids = _locate(eng, sess, mid, [fmap["junk"], fmap.get("provider_junk"), fmap["inbox"]],
@@ -751,7 +777,8 @@ def _do_mark_spam(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, A
                                             fmap.get("provider_junk")],
                            fmap["names"], readonly=False)
     if not uids:
-        return _res(mid, False, "not_found", "Beskeden blev ikke fundet i indbakken eller spam-mapperne.")
+        return _spam_verdict_only(db, acc, mid, actor) or _res(
+            mid, False, "not_found", "Beskeden blev ikke fundet i indbakken eller spam-mapperne.")
     if len(uids) > 1:
         return _res(mid, False, "ambiguous", "Flere beskeder har samme Message-ID – intet er ændret.")
     uid = uids[0]
@@ -886,7 +913,8 @@ def _do_learn(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, Any],
     folder, uids = _locate(eng, sess, mid, [hint, fmap["inbox"], fmap["junk"], fmap.get("provider_junk")],
                            fmap["names"], readonly=True)
     if not uids:
-        return _res(mid, False, "not_found", "Beskeden blev ikke fundet i postkassen.")
+        return (_spam_verdict_only(db, acc, mid, actor) if kind == "spam" else None) or _res(
+            mid, False, "not_found", "Beskeden blev ikke fundet i postkassen.")
     if len(uids) > 1:
         return _res(mid, False, "ambiguous", "Flere beskeder har samme Message-ID – intet er ændret.")
     raw, _flags = _fetch_body(sess.client, uids[0], eng.MAX_FETCH_BYTES)

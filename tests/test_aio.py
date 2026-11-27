@@ -34,8 +34,8 @@ import aio_render as render  # noqa: E402
 AIO_SCRIPTS = ["build.sh", "smoke-test.sh", "migrate.sh", "rollback.sh", "cleanup.sh", "update.sh"]
 AIO_SHELL = AIO_SCRIPTS + ["restore-stack-drill.sh", "lib-aio.sh", "build-check.sh", "sf-entrypoint", "sf-run", "sf-fatal-listener",
                            "sf-clamav"]
-AIO_IMG = "imap-spamfilter-unraid:2.20.0"
-AIO_LABELS = {"spamfilter.layout": "aio", "spamfilter.version": "2.20.0"}
+AIO_IMG = "imap-spamfilter-unraid:2.20.1"
+AIO_LABELS = {"spamfilter.layout": "aio", "spamfilter.version": "2.20.1"}
 
 
 def versions() -> dict[str, str]:
@@ -94,7 +94,7 @@ def test_dockerfile_pins_match_versions_env():
     # Redis build image pinned by digest (the release refuses to publish without it)
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", v["REDIS_AIO_DIGEST"])
     assert a["REDIS_IMAGE"] == f"redis:{v['REDIS_AIO_TAG']}@{v['REDIS_AIO_DIGEST']}"
-    assert a["AIO_VERSION"] == v["VERSION"] == "2.20.0"
+    assert a["AIO_VERSION"] == v["VERSION"] == "2.20.1"
     assert a["EXPECT_RSPAMD"] == v["AIO_RSPAMD_VERSION"] == "4.2.2"
     assert a["EXPECT_REDIS"] == v["AIO_REDIS_VERSION"] == "8.10.3"
     assert a["EXPECT_UNBOUND"] == v["AIO_UNBOUND_SERIES"] == "1.26"
@@ -677,7 +677,7 @@ STAT_BEFORE = ("Results for command: stat (0.003 seconds)\nMessages scanned: 10\
                "learned: 216; users: 2; languages: 0\nTotal learns: 467\n")
 HEALTH_OK = json.dumps({"ts": 1, "ok": True, "parts": {p: {"ok": True, "detail": "ok"}
                                                        for p in ("filter", "rspamd", "redis", "unbound")}})
-API_OK = json.dumps({"ok": True, "version": "2.20.0",
+API_OK = json.dumps({"ok": True, "version": "2.20.1",
                      "accounts": {"bynet": "idle", "molt": "working", "inge": "paused"}})
 
 
@@ -862,14 +862,14 @@ def test_build_context_only_stages_runtime_files_and_no_secrets(tmp_path):
     assert "redis.conf" not in rs and "worker-controller.inc" not in rs  # rendered secrets never
     assert {"redis.conf.template", "worker-controller.inc.template", "fuzzy_check.conf",
             "fuzzy_check.conf.readonly", "options.inc", "actions.conf"} <= rs
-    assert (ctx / "aio" / "share" / "VERSION").read_text() == "2.20.0\n"
+    assert (ctx / "aio" / "share" / "VERSION").read_text() == "2.20.1\n"
     assert (ctx / "aio" / "share" / "unbound.conf").read_text() == (DEPLOY / "unbound.conf").read_text()
     for f in ("sf-entrypoint", "sf-run", "sf-health", "sfctl-aio", "build-check.sh"):
         assert os.access(ctx / "aio" / f, os.X_OK), f
     args = dict(line.split("=", 1) for line in (ctx / "build-args.env").read_text().splitlines())
     v = versions()
     assert args["RSPAMD_IMAGE"] == v["RSPAMD_IMAGE"] and args["FILTER_BASE_IMAGE"] == v["FILTER_BASE_IMAGE"]
-    assert args["REDIS_IMAGE"].startswith("redis:8.10.3") and args["AIO_VERSION"] == "2.20.0"
+    assert args["REDIS_IMAGE"].startswith("redis:8.10.3") and args["AIO_VERSION"] == "2.20.1"
     assert set(args) == set(dockerfile_args())
 
 
@@ -959,7 +959,7 @@ BEFORE_SNAPSHOT = {"version": "2.3.6", "accounts": {"bynet": "idle", "molt": "wo
     ("bayes", {"FAKE_DOCKER_EXEC": _exec_map(after_stat=STAT_BEFORE.replace("learned: 251", "learned: 10"))}),
     ("redis keys", {"FAKE_DOCKER_EXEC": _exec_map(after_db="12")}),
     ("parts", {"FAKE_DOCKER_EXEC": _exec_map(health=json.dumps({"ok": False, "parts": {}}))}),
-    ("version", {"FAKE_CURL_MAP": json.dumps({"/api/health": API_OK.replace("2.20.0", "2.3.6")})}),
+    ("version", {"FAKE_CURL_MAP": json.dumps({"/api/health": API_OK.replace("2.20.1", "2.3.6")})}),
     ("account", {"FAKE_CURL_MAP": json.dumps({"/api/health": API_OK.replace('"working"', '"auth_failed"')})}),
     ("ha", {"FAKE_CURL_CODES": json.dumps({"/api/v1/ha": "200"})}),
     ("unhealthy", {"FAKE_NEW_HEALTH": "unhealthy"}),
@@ -1027,7 +1027,7 @@ def test_compare_rules(host):
     before = {"version": "2.3.6", "accounts": {"a": "idle", "b": "working", "c": "paused", "d": "error",
                                                "*": "ok"},
               "bayes": {"BAYES_SPAM": 10, "BAYES_HAM": 5}, "dbsize": 100}
-    good = {"version": "2.20.0", "accounts": {"a": "working", "b": "idle", "c": "paused", "d": "auth_failed"},
+    good = {"version": "2.20.1", "accounts": {"a": "working", "b": "idle", "c": "paused", "d": "auth_failed"},
             "bayes": {"BAYES_SPAM": 11, "BAYES_HAM": 5}, "dbsize": 101}
     out = lib_bash(host, f"sf_aio_compare '{json.dumps(before)}' '{json.dumps(good)}'").stdout
     assert out.strip() == ""
@@ -1741,7 +1741,7 @@ case "$1 $2" in
   "container inspect")
     case "$4" in
       *spamfilter.layout*) echo aio ;;
-      *"range \$k, \$v := .Config.Labels"*) echo "spamfilter.layout=aio spamfilter.version=2.20.0 " ;;
+      *"range \$k, \$v := .Config.Labels"*) echo "spamfilter.layout=aio spamfilter.version=2.20.1 " ;;
       *Image*) echo "sha256:img-$5" ;;
       *Running*) echo true ;;
     esac ;;
