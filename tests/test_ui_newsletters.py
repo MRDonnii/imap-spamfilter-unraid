@@ -185,3 +185,31 @@ def test_mail_list_and_detail_offer_back_to_inbox(env):
     assert "Tilbage til indbakken" in html and "Nyhedsbreve (Nyhedsbreve)" in html
     assert "Ligger i nyhedsbreve-mappen" in html
     csp_clean(html)
+
+
+# ----- 2.21: Black Friday setting -------------------------------------------------
+
+
+def test_account_page_has_black_friday_selector(env):
+    html = body(client_for(env, "admin").get("/accounts/bynet"))
+    assert 'id="black-friday"' in html and 'action="/accounts/bynet/black-friday"' in html
+    assert re.search(r'name="black_friday" value="shadow" checked', html)
+    assert "Cyber Monday" in html and "“Black Friday”" in html
+    csp_clean(html)
+
+
+def test_black_friday_setting_writes_config_valid_for_the_real_engine(env, tmp_path):
+    admin = client_for(env, "admin")
+    r = post(admin, "/accounts/bynet/black-friday", {"black_friday": "on"})
+    j = r.get_json()
+    assert r.status_code == 200 and j["ok"] and "flyttes nu til “Black Friday”" in j["message"]
+    assert env.entry("bynet")["black_friday"] == "on" and "black_friday" not in env.entry("molt")
+    assert [a for a in env.audit() if a["action"] == "account_black_friday"][-1]["detail"] == "black_friday=on"
+    assert post(admin, "/accounts/bynet/black-friday", {"black_friday": "on"}).get_json()["message"] == "Uændret."
+    assert post(admin, "/accounts/bynet/black-friday", {"black_friday": "x"}).get_json()["ok"] is False
+    assert post(client_for(env, "anna"), "/accounts/bynet/black-friday", {"black_friday": "off"}).status_code == 403
+    import filter as engine
+    p = tmp_path / "real.yml"
+    p.write_text(yaml.safe_dump(env.raw_config()))
+    accs = {a.name: a for a in engine.load_account_configs(p)}
+    assert accs["bynet"].black_friday == "on" and accs["molt"].black_friday == "shadow"

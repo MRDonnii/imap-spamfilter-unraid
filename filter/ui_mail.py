@@ -2851,6 +2851,8 @@ def _detail_actions(r: Any, *, acc: Any, account: str, key: str, loc: str, here:
     junk_name = str(getattr(acc, "junk", "") or "spam") if acc is not None else "spam"
     where = {"junk": f"Ligger i {junk_name}-mappen", "inbox": "Ligger i indbakken",
              "newsletters": "Ligger i nyhedsbreve-mappen"}.get(loc, "")
+    if loc == "newsletters" and str(_rget(r, "current_folder", "") or "") not in ("", "Nyhedsbreve"):
+        where = f"Ligger i mappen {_rget(r, 'current_folder', '')}"
     if loc == "gone" or acc is None:
         mail_part = f'<p class="act-note">{h(GONE_TEXT)}</p>'
     elif not may_release:

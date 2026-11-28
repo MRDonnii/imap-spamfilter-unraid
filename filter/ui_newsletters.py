@@ -85,12 +85,12 @@ def _count(account: str, event: str, days: int = nl.LIST_DAYS) -> int:
         return 0
 
 
-def shadow_count(account: str) -> int:
-    return _count(account, nl.EVENT_SHADOW)
+def shadow_count(account: str, event: str = nl.EVENT_SHADOW) -> int:
+    return _count(account, event)
 
 
-def moved_count(account: str) -> int:
-    return _count(account, nl.EVENT_MOVE)
+def moved_count(account: str, event: str = nl.EVENT_MOVE) -> int:
+    return _count(account, event)
 
 
 def card_line(acc: Any) -> str:

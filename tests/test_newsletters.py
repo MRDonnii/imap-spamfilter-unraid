@@ -414,3 +414,153 @@ def test_circuit_breaker_and_safe_mode_pause_newsletter_moves(eng, monkeypatch):
     eng.resume_moves(h.db.conn, h.acc.name, "admin")
     eng.newsletter_moves(h.client, h.db, LOG, h.acc, h.acc.folder_map, h.state)
     assert h.client.msgids("Nyhedsbreve") == ["n1@x"]
+
+
+# ----- 2.21: Black Friday folder ----------------------------------------------
+
+@pytest.mark.parametrize("subject", [
+    "Black Friday er tilbage - Vær den første til at spare mest", "BLACK DAYS er i gang 🖤 Spar op til 67%",
+    "Black Weeks er i gang - Spar 15%", "18 Black November tilbud", "Black Deals are live now",
+    "Cyber Monday: sidste chance", "CyberMonday -30%", "💋 SINGLES DAY: Spar 20% på kjoler",
+    "Green Friday starter tidligt i appen", "Dit eksklusive Black Friday-tilbud venter", "Kun 11.11 – 24 timer",
+    "#BlackFriday deals", "Black Week tilbud", "Black-friday sale", "🔥🖤 BLACK🤘WEEK 🖤🔥 Spar op til 65%",
+    "Singles' Day – få 11 % rabat!", "Singles’ Day | Find dit næste printerkup!", "BLACKOUT på vintertøjet!",
+    "Vilde BLACKOUT-tilbud! 🎉"])
+def test_sale_subjects_match(subject):
+    assert nl.is_sale(subject)
+
+
+@pytest.mark.parametrize("subject", [
+    "Ugens tilbud til dig", "Black Mirror – ny sæson", "Blackberry-marmelade", "Faktura 111.111 kr",
+    "Mødet kl. 11.115", "Fredagsbar i Black Box", "Fakturanr. 3713 - 11.11.26", "Black, blue or white?",
+    "Blackout gardiner til soveværelset", "Cybertruslen udvikler sig", "Cyber Security Festival", "", None])
+def test_other_subjects_do_not_match(subject):
+    assert not nl.is_sale(subject)
+
+
+def test_black_friday_config_defaults_and_values(eng, tmp_path):
+    acc = eng.load_account_configs(_write(tmp_path, BASE))[0]
+    assert acc.black_friday == "shadow" and acc.black_friday_folder == "Black Friday"
+    acc = eng.load_account_configs(_write(tmp_path, BASE + "    black_friday: on\n"
+                                          "    black_friday_folder: Udsalg\n"))[0]
+    assert acc.black_friday == "on" and acc.black_friday_folder == "Udsalg"
+
+
+@pytest.mark.parametrize("extra", ["    black_friday: maybe\n", "    black_friday_folder: Junk\n",
+                                   "    black_friday_folder: Nyhedsbreve\n", "    black_friday_folder: ''\n",
+                                   "    black_friday_folder: INBOX\n"])
+def test_black_friday_config_rejects_bad_values(eng, tmp_path, extra):
+    with pytest.raises(eng.ConfigError):
+        eng.load_account_configs(_write(tmp_path, BASE + extra))
+
+
+BF = "Black Friday: spar op til 50% 🖤"
+
+
+def test_black_friday_moves_even_with_newsletters_off(eng, monkeypatch):
+    h = Harness(eng, monkeypatch, newsletters="off", black_friday="on")
+    deliver_news(h, "bf@x", subject=BF)
+    deliver_news(h, "n1@x")
+    h.scan()
+    assert h.row("bf@x")["our_action"] == nl.ACTION_PENDING
+    assert h.row("n1@x")["our_action"] == "none"
+    h.advance(61)
+    h.loop()
+    assert h.client.msgids("Black Friday") == ["bf@x"]
+    assert h.client.msgids("INBOX") == ["n1@x"]
+    assert "Nyhedsbreve" not in h.client.folders
+    row = h.row("bf@x")
+    assert row["our_action"] == nl.ACTION_MOVED and row["current_folder"] == "Black Friday"
+    assert row["learned_as"] is None and row["moved_to_junk_at"] is None
+    assert [e[1] for e in h.events("blackfriday_move")] == ["bf@x"]
+    assert not h.events("newsletter_move") and not h.events("newsletter_shadow")
+    assert h.stat("blackfriday_moved") == 1 and h.stat("newsletter_moved") == 0
+    assert nl.moved_count(h.db.conn, h.acc.name, now=h.t, event=nl.SALE_EVENT_MOVE) == 1
+    assert h.rspamd.learn_calls == []
+
+
+def test_black_friday_and_newsletters_each_get_their_folder(eng, monkeypatch):
+    h = Harness(eng, monkeypatch, newsletters="on", black_friday="on")
+    deliver_news(h, "bf@x", subject="Cyber Monday – sidste chance")
+    deliver_news(h, "n1@x")
+    h.scan()
+    h.advance(61)
+    h.loop()
+    assert h.client.msgids("Black Friday") == ["bf@x"]
+    assert h.client.msgids("Nyhedsbreve") == ["n1@x"]
+    assert h.client.msgids("INBOX") == []
+
+
+def test_black_friday_shadow_leaves_it_to_the_newsletter_setting(eng, monkeypatch):
+    h = Harness(eng, monkeypatch, newsletters="on", black_friday="shadow")
+    deliver_news(h, "bf@x", subject=BF)
+    h.scan()
+    h.advance(61)
+    h.loop()
+    assert h.client.msgids("Nyhedsbreve") == ["bf@x"]
+    assert "Black Friday" not in h.client.folders
+    assert [e[1] for e in h.events("blackfriday_shadow")] == ["bf@x"]
+    assert nl.shadow_count(h.db.conn, h.acc.name, now=h.t, event=nl.SALE_EVENT_SHADOW) == 1
+
+
+def test_black_friday_needs_move_mode_and_keeps_exclusions(eng, monkeypatch):
+    h = Harness(eng, monkeypatch, newsletters="off", black_friday="on", mode="flag")
+    deliver_news(h, "bf@x", subject=BF)
+    h.scan()
+    h.advance(3600)
+    h.loop()
+    assert h.client.msgids("INBOX") == ["bf@x"] and "Black Friday" not in h.client.folders
+    assert [e[1] for e in h.events("blackfriday_shadow")] == ["bf@x"]
+
+
+def test_black_friday_order_mail_and_plain_mail_stay(eng, monkeypatch):
+    h = Harness(eng, monkeypatch, newsletters="off", black_friday="on")
+    deliver_news(h, "order@x", subject="Ordrebekræftelse: din Black Friday-ordre 12345")
+    h.deliver("plain@x", score=1.0, subject="Black Friday i morgen?")  # no bulk signal
+    deliver_news(h, "spam@x", subject=BF, score=12.0)
+    h.scan()
+    h.advance(3600)
+    h.loop()
+    assert sorted(h.client.msgids("INBOX")) == ["order@x", "plain@x"]
+    assert "Black Friday" not in h.client.folders
+
+
+def test_black_friday_switched_off_cancels_pending(eng, monkeypatch):
+    h = Harness(eng, monkeypatch, newsletters="on", black_friday="on")
+    deliver_news(h, "bf@x", subject=BF)
+    h.scan()
+    h.acc.black_friday = "off"
+    h.advance(61)
+    h.loop()
+    assert h.client.msgids("INBOX") == ["bf@x"]
+    assert h.row("bf@x")["our_action"] == "none"
+    assert h.db.conn.execute("SELECT COUNT(*) FROM newsletter_pending").fetchone()[0] == 0
+
+
+def test_black_friday_drag_back_keeps_sender(eng, monkeypatch):
+    h = Harness(eng, monkeypatch, newsletters="off", black_friday="on")
+    deliver_news(h, "bf@x", subject=BF)
+    h.scan()
+    h.advance(61)
+    h.loop()
+    h.user_moves("bf@x", "Black Friday", "INBOX", flags=["\\Seen"])
+    h.scan()
+    assert h.row("bf@x")["our_action"] == nl.ACTION_KEPT
+    assert nl.is_kept(h.db.conn, h.acc.name, "news@brand.example")
+    h.advance(10)
+    deliver_news(h, "bf2@x", subject="Black Week: endnu flere tilbud")
+    h.scan()
+    h.advance(3600)
+    h.loop()
+    assert sorted(h.client.msgids("INBOX")) == ["bf2@x", "bf@x"]
+
+
+def test_pending_rows_without_dest_still_go_to_newsletters(eng, monkeypatch):
+    """Rows queued by 2.20 (no dest column value) keep their old meaning."""
+    h = Harness(eng, monkeypatch, newsletters="on", black_friday="on")
+    deliver_news(h, "n1@x")
+    h.scan()
+    h.db.conn.execute("UPDATE newsletter_pending SET dest=NULL")
+    h.advance(61)
+    h.loop()
+    assert h.client.msgids("Nyhedsbreve") == ["n1@x"]

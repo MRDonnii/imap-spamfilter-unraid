@@ -67,6 +67,8 @@ class AdminAccount:
     threat_notice: bool = True
     newsletters: str = "shadow"           # 2.6 (A4)
     newsletter_folder: str = "Nyhedsbreve"
+    black_friday: str = "shadow"          # 2.21
+    black_friday_folder: str = "Black Friday"
     junk_explicit: bool = False
     trash_explicit: bool = False
     password_file: str | None = None

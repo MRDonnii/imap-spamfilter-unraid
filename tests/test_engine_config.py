@@ -160,7 +160,7 @@ def test_primitives_exist():
                  "normalize_rule_pattern", "request_reload", "learn_message", "MoveUnsupported",
                  "ScanResult", "MAX_FETCH_BYTES", "STATE_DIR", "DB_PATH", "CONFIG_PATH"):
         assert hasattr(engine, name), name
-    assert engine.VERSION == "2.20.1"
+    assert engine.VERSION == "2.21.0"
     assert engine.SCORE_VERSION == 2
 
 

@@ -65,8 +65,22 @@ rules pass mail over the threshold), while "keep in inbox" must only
 switch off the newsletter folder. The list is shown (and can be emptied
 per sender) on the Nyhedsbreve page.
 
-Schema: additive only (two new tables, created idempotently by
-`ensure_schema`); older images ignore them.
+Black Friday folder (2.21): ``black_friday: off | shadow | on`` (default
+``shadow``) and ``black_friday_folder`` (default ``Black Friday``). A mail
+the classification above calls a newsletter AND whose subject names a
+sales event (SALE_RE: Black Friday / Week / Days / Deals / November,
+Blackout, Cyber Monday / Week, Singles Day, Green Friday, 11.11) goes to the Black
+Friday folder instead - independent of the ``newsletters`` setting, so it
+can be switched on per mailbox on its own. Everything else is the
+newsletter path: the same exclusions (contacts, allow rules, kept senders,
+own domains, transactional mail ...), the same pending table (column
+``dest`` = the target folder; NULL = the newsletter folder), journal,
+repair, rate bucket and "keep in inbox" memory. ``shadow`` only records
+(event ``blackfriday_shadow``) and leaves the mail to the newsletter
+setting; ``on`` moves only while the account is in mode ``move``.
+
+Schema: additive only (two new tables + the nullable ``dest`` column,
+created idempotently by `ensure_schema`); older images ignore them.
 """
 
 from __future__ import annotations
@@ -106,6 +120,22 @@ METRIC_MOVED = "newsletter_moved"
 METRIC_KEPT = "newsletter_kept"
 METRICS = (METRIC_SHADOW, METRIC_MOVED, METRIC_KEPT)
 RATE_ACTION = "newsletter_move"
+
+# 2.21: Black Friday folder (sales-event marketing; see the module text).
+KIND_NEWSLETTER = "newsletter"
+KIND_SALE = "black_friday"
+SALE_DEFAULT_MODE = "shadow"
+SALE_DEFAULT_FOLDER = "Black Friday"
+SALE_EVENT_SHADOW = "blackfriday_shadow"
+SALE_EVENT_QUEUED = "blackfriday_queued"
+SALE_EVENT_MOVE = "blackfriday_move"
+SALE_METRIC_SHADOW = "blackfriday_shadow"
+SALE_METRIC_MOVED = "blackfriday_moved"
+SALE_RE = re.compile(
+    r"\bblack[\W_]{0,4}(?:friday|fri|weeks?|weekend|days?|deals?|november|month|sales?|offers?|tilbud|uge)\b"
+    r"|\bblackfriday|\bblackweek|\bblackout(?![\W_]*gardin)"
+    r"|\bcyber[\W_]{0,4}(?:monday|weeks?|weekend|deals?|sales?)\b|\bcybermonday"
+    r"|\bsingles?[\W_]{0,4}day\b|\bgreen[\W_]{0,4}friday\b|(?<![\d.,])11\.11(?![\d.,])", re.I)
 LIST_DAYS = 7
 MOVE_RETRY_LIMIT = 3
 
@@ -149,6 +179,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     for stmt in SCHEMA.split(";"):
         if stmt.strip():
             conn.execute(stmt)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(newsletter_pending)")}
+    if "dest" not in cols:  # 2.21: target folder (NULL = the newsletter folder)
+        conn.execute("ALTER TABLE newsletter_pending ADD COLUMN dest TEXT")
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +217,31 @@ def folder_of(acc: Any) -> str:
     name = str(getattr(acc, "newsletter_folder", "") or DEFAULT_FOLDER)
     delim = str(getattr(acc, "delimiter", "/") or "/")
     return name if delim == "/" or "/" not in name else name.replace("/", delim)
+
+
+def sale_mode_of(acc: Any) -> str:
+    m = str(getattr(acc, "black_friday", SALE_DEFAULT_MODE) or SALE_DEFAULT_MODE)
+    return m if m in MODES else SALE_DEFAULT_MODE
+
+
+def sale_moves_enabled(acc: Any) -> bool:
+    return sale_mode_of(acc) == "on" and getattr(acc, "mode", "shadow") == "move"
+
+
+def sale_folder_of(acc: Any) -> str:
+    name = str(getattr(acc, "black_friday_folder", "") or SALE_DEFAULT_FOLDER)
+    delim = str(getattr(acc, "delimiter", "/") or "/")
+    return name if delim == "/" or "/" not in name else name.replace("/", delim)
+
+
+def active(acc: Any) -> bool:
+    """Classify inbox mail at all (either folder not off)."""
+    return mode_of(acc) != "off" or sale_mode_of(acc) != "off"
+
+
+def is_sale(subject: Any) -> bool:
+    """The subject names a sales event (Black Friday, Cyber Monday ...)."""
+    return bool(SALE_RE.search(str(subject or "")))
 
 
 def folder_conflict(dest: str, fmap: dict[str, Any]) -> str | None:
@@ -288,6 +346,7 @@ class Verdict:
     reason: str
     detail: str = ""
     signals: list = field(default_factory=list)
+    sale: bool = False  # 2.21: the subject names a sales event (SALE_RE)
 
     @property
     def bulk(self) -> bool:
@@ -514,7 +573,7 @@ def scan_decision(eng: Any, db: Any, acc: Any, sc: Any, *, flags: Iterable[str],
     """Classify one scanned inbox mail (inside _scan_and_act, before the
     bookkeeping transaction). None when the feature is off or the spam
     decision already acts on / decided about the mail."""
-    if mode_of(acc) == "off":
+    if not active(acc):
         return None
     decision = sc.decision
     if decision.spam or (decision.action or "none") != "none" or str(decision.rule_hit or "").startswith("allow:"):
@@ -527,13 +586,17 @@ def scan_decision(eng: Any, db: Any, acc: Any, sc: Any, *, flags: Iterable[str],
     except sqlite3.Error:
         allow = True  # unknown: keep it in the inbox
     try:
-        return classify(raw, subject=sc.subject, sender=sc.sender, envelope_from=sc.envelope_from,
-                        names=sc.names, ctx=sc.ctx, auth=sc.auth, final=sc.final, threshold=sc.thr,
-                        spam=decision.spam, threat=sc.threat, flags=flags, allow_rule=allow,
-                        kept=is_kept(db.conn, acc.name, sc.sender), owner_domains=eng.owner_domains(acc))
+        v = classify(raw, subject=sc.subject, sender=sc.sender, envelope_from=sc.envelope_from,
+                     names=sc.names, ctx=sc.ctx, auth=sc.auth, final=sc.final, threshold=sc.thr,
+                     spam=decision.spam, threat=sc.threat, flags=flags, allow_rule=allow,
+                     kept=is_kept(db.conn, acc.name, sc.sender), owner_domains=eng.owner_domains(acc))
     except Exception as ex:  # noqa: BLE001 - never block a scan
         log.warning("newsletter classification failed: %s", type(ex).__name__)
         return None
+    v.sale = sale_mode_of(acc) != "off" and is_sale(sc.subject)
+    if mode_of(acc) == "off" and not v.sale:
+        return None  # only the Black Friday folder is on, and this is no sales mail
+    return v
 
 
 def record_scan(db: Any, acc: Any, verdict: Verdict | None, *, msgid: str, uv: int, uid: int, inbox: str,
@@ -546,17 +609,29 @@ def record_scan(db: Any, acc: Any, verdict: Verdict | None, *, msgid: str, uv: i
         if verdict.bulk and verdict.reason not in ("spam", "no_bulk"):
             db.log_event(EVENT_EXCLUDED, msgid, detail=verdict.event_detail())
         return None
+    grace = max(0, int(getattr(acc, "move_grace_seconds", 60) or 0))
+
+    def queue(dest: str | None, event: str) -> str:
+        db.conn.execute(
+            "INSERT OR REPLACE INTO newsletter_pending(account, uidvalidity, uid, message_id, folder, due_at, "
+            "queued_at, attempts, dest) VALUES(?,?,?,?,?,?,?,0,?)",
+            (db.account, int(uv), int(uid), msgid, inbox, now + grace, now, dest))
+        db.log_event(event, msgid, detail=verdict.event_detail())
+        return ACTION_PENDING
+
+    if verdict.sale and sale_mode_of(acc) != "off":
+        if sale_moves_enabled(acc):
+            return queue(sale_folder_of(acc), SALE_EVENT_QUEUED)
+        # Prøv: record it, and let the newsletter setting decide as before.
+        db.log_event(SALE_EVENT_SHADOW, msgid, detail=verdict.event_detail())
+        db.bump(SALE_METRIC_SHADOW)
+    if mode_of(acc) == "off":
+        return None
     if not moves_enabled(acc):
         db.log_event(EVENT_SHADOW, msgid, detail=verdict.event_detail())
         db.bump(METRIC_SHADOW)
         return None
-    grace = max(0, int(getattr(acc, "move_grace_seconds", 60) or 0))
-    db.conn.execute(
-        "INSERT OR REPLACE INTO newsletter_pending(account, uidvalidity, uid, message_id, folder, due_at, "
-        "queued_at, attempts) VALUES(?,?,?,?,?,?,?,0)", (db.account, int(uv), int(uid), msgid, inbox,
-                                                         now + grace, now))
-    db.log_event(EVENT_QUEUED, msgid, detail=verdict.event_detail())
-    return ACTION_PENDING
+    return queue(None, EVENT_QUEUED)
 
 
 def on_inbox_sighting(db: Any, log_: logging.Logger, acc: Any, fmap: dict[str, str], prior: Any, msgid: str,
@@ -609,20 +684,46 @@ def _cancel_pending(db: Any, rows: Iterable[Any], event: str | None = None) -> N
             db.log_event(event, r["message_id"], detail=f"uid={r['uid']}")
 
 
+def _kind_names(kind: str) -> tuple[str, str]:
+    """(move event, moved metric) for a folder kind."""
+    return (SALE_EVENT_MOVE, SALE_METRIC_MOVED) if kind == KIND_SALE else (EVENT_MOVE, METRIC_MOVED)
+
+
 def execute_moves(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, fmap: dict[str, str],
                   state: Any) -> int:
-    """Move due newsletters to the newsletter folder (engine thread, after
-    the spam moves). Returns the number moved."""
+    """Move due newsletters to the newsletter folder and due sales mail to
+    the Black Friday folder (engine thread, after the spam moves). Returns
+    the number moved."""
     try:
         pending = db.conn.execute("SELECT * FROM newsletter_pending WHERE account=? ORDER BY due_at, uid",
                                   (db.account,)).fetchall()
     except sqlite3.Error:
         return 0
-    dest = folder_of(acc)
+    nl_dest, sale_dest = folder_of(acc), sale_folder_of(acc)
+    nl_rows: list[Any] = []
+    sale_rows: list[Any] = []
+    stray: list[Any] = []
+    for r in pending:
+        d = _get(r, "dest") or nl_dest
+        (nl_rows if d == nl_dest else sale_rows if d == sale_dest else stray).append(r)
+    if stray:  # queued for a folder that was renamed since: leave it in the inbox
+        with db.tx():
+            _cancel_pending(db, stray, "newsletter_cancelled")
+    moved = _execute_group(eng, client, db, log_, acc, fmap, state, nl_rows, nl_dest, moves_enabled(acc),
+                           KIND_NEWSLETTER)
+    if sale_dest != nl_dest:
+        moved += _execute_group(eng, client, db, log_, acc, fmap, state, sale_rows, sale_dest,
+                                sale_moves_enabled(acc), KIND_SALE)
+    return moved
+
+
+def _execute_group(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, fmap: dict[str, str],
+                   state: Any, pending: list[Any], dest: str, enabled: bool, kind: str) -> int:
+    move_event, moved_metric = _kind_names(kind)
     has_journal = any(r["dest"] == dest for r in eng._journal_rows(db, fmap["inbox"]))
     if not pending and not has_journal:
         return 0
-    if not moves_enabled(acc):
+    if not enabled:
         if pending:
             with db.tx():
                 _cancel_pending(db, pending, "newsletter_cancelled")
@@ -641,7 +742,7 @@ def execute_moves(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any
             log_.error("newsletter folder %s collides with the %s folder; not moving", dest, conflict)
         return 0
     if has_journal:
-        repair_moves(eng, client, db, log_, acc, fmap, state, dest)
+        repair_moves(eng, client, db, log_, acc, fmap, state, dest, kind=kind)
     inbox = fmap["inbox"]
     due = [r for r in pending if int(r["due_at"]) <= now and r["folder"] == inbox]
     if not due:
@@ -730,8 +831,8 @@ def execute_moves(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any
                             (db.account, inbox, uv, uid))
             db.update_message(msgid, current_folder=dest, our_action=ACTION_MOVED, last_seen=now)
             db.record_rate(RATE_ACTION)
-            db.bump(METRIC_MOVED)
-            db.log_event(EVENT_MOVE, msgid, detail=f"uid={uid} -> {dest}")
+            db.bump(moved_metric)
+            db.log_event(move_event, msgid, detail=f"uid={uid} -> {dest}")
         for uid in failed:
             msgid = msgids[uid]
             if not copied_any:
@@ -780,7 +881,7 @@ def _ensure_folder(eng: Any, client: Any, db: Any, log_: logging.Logger, state: 
 
 
 def repair_moves(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any, fmap: dict[str, str],
-                 state: Any, dest: str) -> int:
+                 state: Any, dest: str, *, kind: str = KIND_NEWSLETTER) -> int:
     """Finish newsletter moves interrupted between COPY, STORE \\Deleted and
     UID EXPUNGE, with the engine's own repair (filter._repair_one) against
     the newsletter folder. Returns the number of rows resolved."""
@@ -817,8 +918,8 @@ def repair_moves(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any,
                                 (db.account, msgid))
                 if outcome == "completed":
                     db.record_rate(RATE_ACTION)
-                    db.bump(METRIC_MOVED)
-                db.log_event(EVENT_MOVE, msgid, detail=f"repair stage={r['stage']} {outcome}")
+                    db.bump(_kind_names(kind)[1])
+                db.log_event(_kind_names(kind)[0], msgid, detail=f"repair stage={r['stage']} {outcome}")
             elif outcome == "kept" or (outcome in ("retry", "skipped") and not pending):
                 db.conn.execute("UPDATE messages SET our_action='none' WHERE account=? AND message_id=? "
                                 "AND our_action IN (?,?)", (db.account, msgid, ACTION_PENDING, ACTION_FAILED))
@@ -842,22 +943,24 @@ def repair_moves(eng: Any, client: Any, db: Any, log_: logging.Logger, acc: Any,
 # ---------------------------------------------------------------------------
 
 
-def shadow_count(conn: sqlite3.Connection, account: str, *, days: int = LIST_DAYS, now: float | None = None) -> int:
+def shadow_count(conn: sqlite3.Connection, account: str, *, days: int = LIST_DAYS, now: float | None = None,
+                 event: str = EVENT_SHADOW) -> int:
     """Distinct mails that would have been moved in the last `days` days."""
     since = int((now if now is not None else time.time()) - days * 86400)
     try:
         row = conn.execute("SELECT COUNT(DISTINCT message_id) FROM events WHERE account=? AND event=? AND ts>=?",
-                           (account, EVENT_SHADOW, since)).fetchone()
+                           (account, event, since)).fetchone()
     except sqlite3.Error:
         return 0
     return int(row[0] or 0) if row else 0
 
 
-def moved_count(conn: sqlite3.Connection, account: str, *, days: int = LIST_DAYS, now: float | None = None) -> int:
+def moved_count(conn: sqlite3.Connection, account: str, *, days: int = LIST_DAYS, now: float | None = None,
+                event: str = EVENT_MOVE) -> int:
     since = int((now if now is not None else time.time()) - days * 86400)
     try:
         row = conn.execute("SELECT COUNT(DISTINCT message_id) FROM events WHERE account=? AND event=? AND ts>=?",
-                           (account, EVENT_MOVE, since)).fetchone()
+                           (account, event, since)).fetchone()
     except sqlite3.Error:
         return 0
     return int(row[0] or 0) if row else 0
