@@ -1,5 +1,15 @@
 # Ændringslog
 
+## 2.21.0 — 2026-11-28 (beta)
+
+- **Black Friday-mappe:** Ny indstilling pr. postkasse under Konti: **Black Friday** (Fra / Prøv / Til). Reklamer for
+  Black Friday, Black Week, Black Days, Cyber Monday, Singles Day, Green Friday og lignende kan flyttes til mappen
+  "Black Friday", så de ikke fylder i indbakken eller i Nyhedsbreve. Det gælder kun mails, der også tæller som
+  nyhedsbreve, og som nævner udsalget i emnet; ordrer, fakturaer, leveringer, kendte kontakter og tilladte afsendere
+  bliver i indbakken som altid. Det virker, selv om Nyhedsbreve er slået fra. Prøv (standard) flytter intet og viser
+  kun tallet på kontosiden. Flytter man en mail tilbage, bliver afsenderen i indbakken fremover, og "Flyt til spam"
+  og "Tilbage til indbakken" virker også fra den nye mappe.
+
 ## 2.20.1 — 2026-11-27 (beta)
 
 - **"Det er spam" og "Frigiv" virker igen på ældre mails:** Siden 2.15 kunne mails, der blev scannet før

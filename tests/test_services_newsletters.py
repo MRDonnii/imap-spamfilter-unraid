@@ -91,3 +91,19 @@ def test_unkeep_lets_the_sender_be_moved_again(live):
     live.clock.t += 61
     live_loop(live, h)
     assert h.box.msgids("Nyhedsbreve") == ["n3@x"]
+
+
+def test_black_friday_folder_back_to_inbox_and_mark_spam(live):
+    h = live_account(live, SCAN, newsletters="off", black_friday="on")
+    news(live, h, "bf1@x", subject="Black Friday: 50% på alt")
+    news(live, h, "bf2@x", subject="Cyber Monday: sidste chance", sender="deals@shop.example")
+    live_loop(live, h)
+    live.clock.t += 61
+    live_loop(live, h)
+    assert sorted(h.box.msgids("Black Friday")) == ["bf1@x", "bf2@x"]
+    res = services.newsletter_to_inbox("anna", "bf1@x", "admin", engine=live.eng)
+    assert res["ok"] is True and res["sender_kept"] == "news@brand.example"
+    assert h.box.msgids("INBOX") == ["bf1@x"]
+    [res] = services.mail_action("anna", ["bf2@x"], "mark_spam", "admin", engine=live.eng)
+    assert res["ok"] is True
+    assert h.box.msgids("Spamfilter") == ["bf2@x"] and h.box.msgids("Black Friday") == []

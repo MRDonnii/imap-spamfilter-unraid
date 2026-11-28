@@ -66,7 +66,7 @@ if __name__ == "__main__":
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "2.20.1"
+VERSION = "2.21.0"
 SCORE_VERSION = 2  # A4: scores computed with the 2.0 sender context
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "/app/accounts.yml"))
@@ -419,6 +419,10 @@ class Account:
     # their own folder. off | shadow (record only) | on (move, mode move only).
     newsletters: str = "shadow"
     newsletter_folder: str = "Nyhedsbreve"
+    # 2.21 (newsletters.py): sales-event marketing (Black Friday, Cyber
+    # Monday ...) to its own folder. off | shadow | on, like newsletters.
+    black_friday: str = "shadow"
+    black_friday_folder: str = "Black Friday"
 
 
 # Built-in defaults applied unless overridden in accounts.yml `defaults:` or in
@@ -515,6 +519,10 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
     # account is in mode move), off = leave them alone. Spam always wins.
     "newsletters": "shadow",
     "newsletter_folder": "Nyhedsbreve",
+    # 2.21: Black Friday / Cyber Monday / Singles Day marketing (a newsletter
+    # whose subject names a sales event) to black_friday_folder.
+    "black_friday": "shadow",
+    "black_friday_folder": "Black Friday",
 }
 
 REQUIRED_PER_ACCOUNT: tuple[str, ...] = ("name", "user", "imap_host")
@@ -777,6 +785,9 @@ def _build_account(entry: dict[str, Any], defaults: dict[str, Any]) -> Account:
             newsletters=_cfg_newsletters(merged.get("newsletters", "shadow"), "newsletters", label),
             newsletter_folder=_cfg_str(merged.get("newsletter_folder", "Nyhedsbreve"), "newsletter_folder",
                                        label).strip(),
+            black_friday=_cfg_newsletters(merged.get("black_friday", "shadow"), "black_friday", label),
+            black_friday_folder=_cfg_str(merged.get("black_friday_folder", "Black Friday"), "black_friday_folder",
+                                         label).strip(),
         )
     except KeyError as ex:
         raise ConfigError(f"account {label!r}: missing config key {ex.args[0]!r}") from None
@@ -988,6 +999,13 @@ def validate_account(acc: Account) -> None:
     if acc.newsletter_folder.lower() in {f.lower() for f in folder_set} or acc.newsletter_folder.upper() == "INBOX":
         raise ConfigError(f"{acc.name}: newsletter_folder must differ from inbox/junk/trash and the "
                           f"training folders")
+    if acc.black_friday not in NEWSLETTER_MODES:
+        raise ConfigError(f"{acc.name}: black_friday must be off, shadow or on")
+    _check_folder_name(acc, "black_friday_folder")
+    if (acc.black_friday_folder.lower() in {f.lower() for f in folder_set} | {acc.newsletter_folder.lower()}
+            or acc.black_friday_folder.upper() == "INBOX"):
+        raise ConfigError(f"{acc.name}: black_friday_folder must differ from inbox/junk/trash, the training "
+                          f"folders and newsletter_folder")
 
 
 _CONTACT_GROUP_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,99}$")
@@ -3155,7 +3173,7 @@ def find_uids_by_message_id(client: IMAPClient, message_id: str, *,
                    if identity is None and account is not None else None)
             if row is not None:
                 # Legacy verdicts/learns cannot select a new payload by ID
-                # alone. 2.20.1: a row scanned before the identity table
+                # alone. 2.21.0: a row scanned before the identity table
                 # (most caught mail in 'Tjek disse') is proven by the sender
                 # address and exact size recorded at scan time - a new mail
                 # reusing the ID must match both. Without them: nothing.
@@ -5630,7 +5648,7 @@ def _scan_and_act(client: IMAPClient, db: Db, log: logging.Logger, acc: Account,
     # 2.6 (A4): newsletter/marketing mail the spam decision leaves in the
     # inbox (never when it acts on the mail - spam always wins).
     newsletter = (_newsletters().scan_decision(sys.modules[__name__], db, acc, sc, flags=meta.flags, raw=raw)
-                  if getattr(acc, "newsletters", "off") != "off" and not decision.spam else None)
+                  if _newsletters().active(acc) and not decision.spam else None)
 
     now = int(_now())
     provider_flag = ctx.get("provider_flag")

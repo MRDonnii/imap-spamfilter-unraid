@@ -372,6 +372,13 @@ def _folder_map(acc: Any, folders: list[dict[str, Any]]) -> dict[str, Any]:
         nl_folder = _resolve_name(nl_name, delim)
         if nl_folder in names and nl_folder not in (inbox, junk, trash, out.get("provider_junk")):
             out["newsletters"] = nl_folder
+    # 2.21: the Black Friday folder (sales mail moved there by the filter).
+    bf_name = getattr(acc, "black_friday_folder", None)
+    if isinstance(bf_name, str) and bf_name:
+        bf_folder = _resolve_name(bf_name, delim)
+        if bf_folder in names and bf_folder not in (inbox, junk, trash, out.get("provider_junk"),
+                                                    out.get("newsletters")):
+            out["black_friday"] = bf_folder
     return out
 
 
@@ -773,8 +780,8 @@ def _do_release(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, Any
 
 def _do_mark_spam(eng: Any, db: Any, acc: Any, sess: _Session, fmap: dict[str, Any],
                   caps: frozenset, mid: str, actor: str) -> dict[str, Any]:
-    folder, uids = _locate(eng, sess, mid, [fmap["inbox"], fmap.get("newsletters"), fmap["junk"],
-                                            fmap.get("provider_junk")],
+    folder, uids = _locate(eng, sess, mid, [fmap["inbox"], fmap.get("newsletters"), fmap.get("black_friday"),
+                                            fmap["junk"], fmap.get("provider_junk")],
                            fmap["names"], readonly=False)
     if not uids:
         return _spam_verdict_only(db, acc, mid, actor) or _res(
@@ -7034,16 +7041,18 @@ def newsletter_to_inbox(account: str, message_id: str, actor: str, *, engine: An
             log.warning("newsletter_to_inbox LIST failed: %s", type(ex).__name__)
             out.update(code="imap_error", text="Mappelisten kunne ikke hentes fra mailserveren.")
             return out
-        folder = fmap.get("newsletters")
-        if not folder:
-            out.update(code="no_folder", text="Mappen til nyhedsbreve findes ikke på mailserveren.")
-            return out
         db = eng.Db(acc.name)
-        row = db.conn.execute("SELECT our_action, sender FROM messages WHERE account=? AND message_id=?",
-                              (acc.name, mid)).fetchone()
+        row = db.conn.execute("SELECT our_action, sender, current_folder FROM messages WHERE account=? "
+                              "AND message_id=?", (acc.name, mid)).fetchone()
         nl = _nl_mod()
         if row is None or row["our_action"] not in (nl.ACTION_MOVED, nl.ACTION_FAILED):
             out.update(code="changed", text="Mailen er ikke flyttet til nyhedsbreve af filteret.")
+            return out
+        # 2.21: the Black Friday folder when the filter put it there.
+        folder = (fmap.get("black_friday") if fmap.get("black_friday")
+                  and row["current_folder"] == fmap.get("black_friday") else fmap.get("newsletters"))
+        if not folder:
+            out.update(code="no_folder", text="Mappen til nyhedsbreve findes ikke på mailserveren.")
             return out
         if _threat_of(db.conn, acc.name, mid)[0]:
             out.update(code="threat", text=THREAT_ADMIN_TEXT)  # never: threats are spam, not newsletters

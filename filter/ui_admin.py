@@ -233,6 +233,7 @@ EVENT_LABELS: dict[str, tuple[str, str]] = {
     "newsletter_kept": ("Nyhedsbrev flyttet tilbage – afsenderen bliver i indbakken", "ok"),
     "newsletter_move_failed": ("Flytning til nyhedsbreve fejlede", "warn"),
     "newsletter_folder_invalid": ("Mappen til nyhedsbreve er en spam- eller systemmappe – intet flyttet", "bad"),
+    "blackfriday_move": ("Flyttet til Black Friday", "info"),
 }
 
 # 2.3: Danish names of the new daily counters (stats_daily metrics).
@@ -245,6 +246,7 @@ STAT_LABELS: dict[str, str] = {
     # 2.6 (A4)
     "newsletter_shadow": "Nyhedsbreve, der ville være flyttet", "newsletter_moved": "Nyhedsbreve flyttet",
     "newsletter_kept": "Nyhedsbreve flyttet tilbage",
+    "blackfriday_shadow": "Black Friday-mails, der ville være flyttet", "blackfriday_moved": "Black Friday-mails flyttet",
     # 2.6 (C2), registered in 2.11.1
     "dmarc_reports": "DMARC-rapporter læst", "dmarc_moved": "DMARC-rapporter flyttet",
 }
@@ -319,6 +321,7 @@ AUDIT_LABELS: dict[str, str] = {
     # 2.6 (A4)
     "account_newsletters": "Nyhedsbreve ændret", "newsletter_back": "Nyhedsbrev flyttet tilbage til indbakken",
     "newsletter_unkeep": "Afsender fjernet fra Bliver i indbakken",
+    "account_black_friday": "Black Friday ændret",
     # 2.7 Falske afsendernavne
     "namespoof_mode": "Falske afsendernavne: Fra/Prøv/Til ændret", "namespoof_name": "Beskyttet navn gemt",
     "namespoof_name_remove": "Beskyttet navn fjernet", "namespoof_allow": "Adresse tilladt for beskyttet navn",
@@ -1219,7 +1222,7 @@ def account_page(name: str):
         + kit.card(_advanced_card(acc), cls="adv-card")
         + '</div><div class="stack">'
         + _name_card(acc) + _learning_card(acc) + _trust_card(acc) + _server_card(acc, folders) + _sizes_card(acc)
-        + _receipt_card(acc) + _threat_notice_card(acc) + _newsletter_card(acc)
+        + _receipt_card(acc) + _threat_notice_card(acc) + _newsletter_card(acc) + _black_friday_card(acc)
         + _forwarders_card(acc) + conn_card + _danger_card(acc)
         + "</div></div>")
     label = ui.account_label(acc.name)
@@ -2274,6 +2277,70 @@ def account_newsletters(name: str):
     text = {"off": "Nyhedsbreve bliver nu i indbakken.",
             "shadow": "Prøv: filteret viser nu kun, hvilke nyhedsbreve det ville flytte.",
             "on": f"Nyhedsbreve flyttes nu til “{_attr(acc, 'newsletter_folder', nl.DEFAULT_FOLDER)}”."}[value]
+    return ui.respond(f"{text} ({ui.account_label(name)})", next_url=back, reload=True)
+
+
+# ---- 2.21: Black Friday (config keys black_friday / black_friday_folder) ---------------------
+
+
+def _black_friday_card(acc: Any) -> str:
+    import newsletters as nl  # noqa: PLC0415 - pure helper next to the engine
+    import ui_newsletters  # noqa: PLC0415 - registered by ui_mail
+
+    mode = nl.sale_mode_of(acc)
+    folder = str(_attr(acc, "black_friday_folder", nl.SALE_DEFAULT_FOLDER) or nl.SALE_DEFAULT_FOLDER)
+    explain = ("Reklamer for Black Friday, Black Week, Cyber Monday, Singles Day, Green Friday og lignende "
+               f"kan flyttes til mappen “{folder}”, så de ikke fylder i indbakken. Det gælder kun mails, som "
+               "også tæller som nyhedsbreve, og som nævner udsalget i emnet – men det virker, selvom "
+               "Nyhedsbreve er slået fra. Fra: intet særligt. Prøv: intet flyttes, filteret viser kun, hvad "
+               "det ville flytte. Til: de flyttes. De samme undtagelser som for nyhedsbreve gælder: kendte "
+               f"kontakter, tilladte afsendere, {_platform_text()}, ordrer, fakturaer og leveringer bliver i "
+               "indbakken. Flytter du en mail tilbage, bliver afsenderen i indbakken fremover.")
+    n_shadow = ui_newsletters.shadow_count(acc.name, nl.SALE_EVENT_SHADOW)
+    n_moved = ui_newsletters.moved_count(acc.name, nl.SALE_EVENT_MOVE)
+    counts = (f'<p class="muted small">De seneste 7 dage: {kit.fmt_int(n_shadow)} ville være flyttet · '
+              f'{kit.fmt_int(n_moved)} flyttet.</p>')
+    inner = (kit.hidden("next", request.path + "#black-friday")
+             + kit.form_field("Black Friday", kit.segmented("black_friday", NEWSLETTER_OPTIONS, mode)
+                              .replace('class="segmented"', 'class="segmented seg-newsletters"'),
+                              hint=explain)
+             + ('' if _attr(acc, "mode", "shadow") == "move" or mode != "on" else
+                '<p class="faint small">Kontoen filtrerer ikke (Filtrér er slået fra), så Til virker som Prøv, '
+                "indtil du slår Filtrér til.</p>")
+             + counts
+             + f'<div class="form-actions">{kit.button("Gem", kind="secondary", icon="check")}</div>')
+    tone = {"off": "neutral", "shadow": "info", "on": "ok"}[mode]
+    return ('<div id="black-friday"></div>'
+            + kit.card(kit.post_form(f"/accounts/{_q(acc.name)}/black-friday", inner), title="Black Friday",
+                       subtitle="Udsalgsreklamer i deres egen mappe.",
+                       actions=kit.chip(nl.MODE_TEXT[mode], tone), cls="newsletter-card"))
+
+
+@app.post("/accounts/<name>/black-friday")
+@ui.admin_required
+def account_black_friday(name: str):
+    import newsletters as nl  # noqa: PLC0415
+
+    acc = _acc_or_404(name)
+    back = _back(name) + "#black-friday"
+    value = (request.form.get("black_friday") or "").strip().lower()
+    if value not in nl.MODES:
+        return ui.respond("Vælg Fra, Prøv eller Til.", ok=False, next_url=back)
+    if nl.sale_mode_of(acc) == value:
+        return ui.respond("Uændret.", next_url=back)
+    if locked := _config_locked():
+        return ui.respond(locked, ok=False, next_url=back)
+
+    def mutate(raw: dict) -> None:
+        _entry(raw, name)["black_friday"] = value
+
+    err = _write_config(mutate, "account_black_friday", account=name, detail=f"black_friday={value}")
+    if err:
+        return ui.respond(err, ok=False, next_url=back)
+    folder = _attr(acc, "black_friday_folder", nl.SALE_DEFAULT_FOLDER)
+    text = {"off": "Black Friday-mails behandles nu som almindelige nyhedsbreve.",
+            "shadow": "Prøv: filteret viser nu kun, hvilke Black Friday-mails det ville flytte.",
+            "on": f"Black Friday-mails flyttes nu til “{folder}”."}[value]
     return ui.respond(f"{text} ({ui.account_label(name)})", next_url=back, reload=True)
 
 
